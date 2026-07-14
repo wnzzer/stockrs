@@ -37,15 +37,19 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ver="${{ inputs.version }}"
             ver="${ver#v}"   # 去掉可能的前缀 v
-            # bump Cargo.toml 的 [package] version(首个 version= 行)
-            sed -i "0,/^version = /s//version = \"$ver\"/" Cargo.toml
+            # bump [package] version:替换整行(^version = 仅匹配 [package] 版本,
+            # 依赖行的 version 是内联 { version = .. } 不在行首)。
+            sed -i "0,/^version = /s/^version = .*/version = \"$ver\"/" Cargo.toml
             # 同步 Cargo.lock 里 stockrs 包的版本
             sed -i "/^name = \"stockrs\"/{n;s/^version = .*/version = \"$ver\"/}" Cargo.lock
             git config user.name "wnzzer"
             git config user.email "wnzzer@outlook.com"
-            git add Cargo.toml Cargo.lock
-            git commit -m "chore: 版本号 → $ver"
-            git push origin HEAD:main
+            # 版本无变化(如重发同一版本)时跳过提交,直接用当前 HEAD。
+            if ! git diff --quiet; then
+              git add Cargo.toml Cargo.lock
+              git commit -m "chore: 版本号 → $ver"
+              git push origin HEAD:main
+            fi
             echo "tag=v$ver" >> "$GITHUB_OUTPUT"
             echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
