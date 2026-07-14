@@ -152,7 +152,8 @@ impl QuoteSource for Eastmoney {
         let resp = http_client()?
             .get(ULIST_URL)
             .query(&[
-                ("fields", "f2,f3,f4,f5,f6,f8,f12,f14,f15,f16,f17,f18"),
+                // f1 = 价格小数位数（股票 2、基金常见 3），价格字段需按它缩放
+                ("fields", "f1,f2,f3,f4,f5,f6,f8,f12,f14,f15,f16,f17,f18"),
                 ("secids", secids.as_str()),
             ])
             .send()
@@ -172,8 +173,9 @@ impl QuoteSource for Eastmoney {
         let mut out = Vec::with_capacity(diff.len());
         for d in diff {
             let num = |k: &str| d.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-            let price = num("f2") / 100.0;
-            let prev_close = num("f18") / 100.0;
+            let decimals = d.get("f1").and_then(Value::as_i64).unwrap_or(2) as i32;
+            let scale = 10f64.powi(decimals);
+            let price = |k: &str| num(k) / scale;
             out.push(Quote {
                 code: d
                     .get("f12")
@@ -185,12 +187,12 @@ impl QuoteSource for Eastmoney {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string(),
-                price,
-                prev_close,
-                open: num("f17") / 100.0,
-                high: num("f15") / 100.0,
-                low: num("f16") / 100.0,
-                change: num("f4") / 100.0,
+                price: price("f2"),
+                prev_close: price("f18"),
+                open: price("f17"),
+                high: price("f15"),
+                low: price("f16"),
+                change: price("f4"),
                 change_pct: num("f3") / 10000.0,
                 volume: num("f5"),
                 amount: num("f6"),

@@ -1,12 +1,13 @@
-use anyhow::Result;
-use chrono::Local;
+use anyhow::{anyhow, Result};
+use chrono::{Local, NaiveDate};
 use clap::Subcommand;
 use comfy_table::Table;
 
 use crate::data::models::infer_market;
 use crate::data::source;
 use crate::data::Store;
-use crate::utils::format::money;
+use crate::engine::position_stats;
+use crate::utils::format::{money, sparkline};
 
 #[derive(Subcommand)]
 pub enum PortfolioCmd {
@@ -28,6 +29,8 @@ pub enum PortfolioCmd {
     List,
     /// 历史交易记录
     History,
+    /// 持仓收益分析（收益曲线、回撤、日均收益等）
+    Stats { code: String },
 }
 
 pub async fn run(cmd: PortfolioCmd) -> Result<()> {
@@ -55,6 +58,7 @@ pub async fn run(cmd: PortfolioCmd) -> Result<()> {
         }
         PortfolioCmd::List => list(&store).await,
         PortfolioCmd::History => history(&store),
+        PortfolioCmd::Stats { code } => stats(&store, &code),
     }
 }
 
@@ -141,5 +145,87 @@ fn history(store: &Store) -> Result<()> {
         ]);
     }
     println!("{table}");
+    Ok(())
+}
+
+fn stats(store: &Store, code: &str) -> Result<()> {
+    // 聚合该代码的所有持仓：总量、加权成本、最早建仓日
+    let positions: Vec<_> = store
+        .list_positions()?
+        .into_iter()
+        .filter(|p| p.code == code)
+        .collect();
+    if positions.is_empty() {
+        return Err(anyhow!("{} 无持仓", code));
+    }
+    let qty: i64 = positions.iter().map(|p| p.quantity).sum();
+    let cost: f64 = positions.iter().map(|p| p.price * p.quantity as f64).sum();
+    let avg_cost = if qty != 0 { cost / qty as f64 } else { 0.0 };
+    let buy_date = positions.iter().map(|p| p.date.clone()).min().unwrap();
+
+    let name = store.get_stock(code)?.map(|s| s.name).unwrap_or_default();
+    let klines = store.get_klines(code, Some(&buy_date), None)?;
+    if klines.is_empty() {
+        return Err(anyhow!(
+            "{} 建仓日 {} 起无本地日K，请先 data add / update {}",
+            code,
+            buy_date,
+            code
+        ));
+    }
+    let dates: Vec<String> = klines.iter().map(|k| k.date.clone()).collect();
+    let closes: Vec<f64> = klines.iter().map(|k| k.close).collect();
+    let s = position_stats(avg_cost, qty, &dates, &closes);
+
+    let cal_days = NaiveDate::parse_from_str(&buy_date, "%Y-%m-%d")
+        .ok()
+        .map(|d| (Local::now().date_naive() - d).num_days())
+        .unwrap_or(0);
+
+    let ret = |o: Option<f64>| o.map_or("--".to_string(), |v| format!("{:+.2}%", v * 100.0));
+
+    println!("{} {} 持仓分析", code, name);
+    println!(
+        "建仓 {}（持仓 {} 自然日 / {} 交易日，数据截至 {}）",
+        buy_date,
+        cal_days,
+        s.trading_days,
+        dates.last().unwrap()
+    );
+    println!("成本 ¥{:.3} × {} = ¥{}", s.avg_cost, s.qty, money(s.cost));
+    println!("最新 ¥{:.3} → 市值 ¥{}", s.last_close, money(s.value));
+    println!("{}", "─".repeat(46));
+    println!(
+        "浮动盈亏：¥{} ({:+.2}%)   日均 ¥{}/交易日",
+        money(s.pnl),
+        s.pnl_pct * 100.0,
+        money(s.avg_daily_pnl)
+    );
+    println!(
+        "收益率：  今日 {}   近一周 {}   近一月 {}   累计 {:+.2}%",
+        ret(s.ret_day),
+        ret(s.ret_week),
+        ret(s.ret_month),
+        s.pnl_pct * 100.0
+    );
+    println!(
+        "最大浮盈：¥{} ({:+.2}%) @ {}",
+        money(s.max_profit.0),
+        s.max_profit.1 * 100.0,
+        s.max_profit.2
+    );
+    println!(
+        "最大浮亏：¥{} ({:+.2}%) @ {}",
+        money(s.max_loss.0),
+        s.max_loss.1 * 100.0,
+        s.max_loss.2
+    );
+    println!(
+        "最大回撤：{:.2}%（持仓期市值峰值→谷值）",
+        s.max_drawdown * 100.0
+    );
+    println!("{}", "─".repeat(46));
+    println!("收益曲线(浮盈%)：");
+    println!("{}", sparkline(&s.pnl_pct_series, 46));
     Ok(())
 }

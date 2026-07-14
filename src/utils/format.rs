@@ -47,6 +47,35 @@ pub fn pad_end(s: &str, width: usize) -> String {
     }
 }
 
+/// 用 Unicode 块字符画迷你走势图。超过 width 个点则等距抽样。
+pub fn sparkline(data: &[f64], width: usize) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    if data.is_empty() {
+        return String::new();
+    }
+    let sampled: Vec<f64> = if data.len() > width && width > 0 {
+        (0..width)
+            .map(|i| data[i * (data.len() - 1) / (width - 1).max(1)])
+            .collect()
+    } else {
+        data.to_vec()
+    };
+    let min = sampled.iter().cloned().fold(f64::MAX, f64::min);
+    let max = sampled.iter().cloned().fold(f64::MIN, f64::max);
+    let span = max - min;
+    sampled
+        .iter()
+        .map(|&v| {
+            let idx = if span > 0.0 {
+                ((v - min) / span * 7.0).round() as usize
+            } else {
+                3
+            };
+            BARS[idx.min(7)]
+        })
+        .collect()
+}
+
 fn thousands(n: i64) -> String {
     let s = n.to_string();
     let mut out = String::new();
