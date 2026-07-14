@@ -44,6 +44,24 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      # UPX 压缩二进制(仅 Linux/Windows;macOS 因签名/支持问题跳过)。
+      # continue-on-error:UPX 万一失败也不阻断发布,退回未压缩二进制。
+      - name: Compress with UPX (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+          upx --best --lzma "target/${{ matrix.target }}/release/stockrs"
+
+      - name: Compress with UPX (Windows)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install upx -y
+          upx --best --lzma "target/${{ matrix.target }}/release/stockrs.exe"
+
       - name: Package (unix)
         if: matrix.os != 'windows-latest'
         run: |

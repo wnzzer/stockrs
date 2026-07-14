@@ -1,5 +1,5 @@
+use crate::utils::date::{days_since, today};
 use anyhow::{anyhow, Result};
-use chrono::{Local, NaiveDate};
 use clap::Subcommand;
 use comfy_table::Table;
 
@@ -43,7 +43,7 @@ pub async fn run(cmd: PortfolioCmd) -> Result<()> {
             date,
             note,
         } => {
-            let date = date.unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
+            let date = date.unwrap_or_else(today);
             store.add_position(&code, price, quantity, &date, note.as_deref())?;
             println!("已添加持仓 {} {}股 @ {}", code, quantity, price);
             Ok(())
@@ -177,10 +177,7 @@ fn stats(store: &Store, code: &str) -> Result<()> {
     let closes: Vec<f64> = klines.iter().map(|k| k.close).collect();
     let s = position_stats(avg_cost, qty, &dates, &closes);
 
-    let cal_days = NaiveDate::parse_from_str(&buy_date, "%Y-%m-%d")
-        .ok()
-        .map(|d| (Local::now().date_naive() - d).num_days())
-        .unwrap_or(0);
+    let cal_days = days_since(&buy_date).unwrap_or(0);
 
     let ret = |o: Option<f64>| o.map_or("--".to_string(), |v| format!("{:+.2}%", v * 100.0));
 

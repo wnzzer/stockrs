@@ -17,7 +17,6 @@ serde_json = "1"
 anyhow = "1"
 # 关掉 tty 特性，去掉 crossterm 依赖（不做终端宽度自适应）
 comfy-table = { version = "7", default-features = false }
-chrono = "0.4"
 rhai = { version = "1.19", features = ["sync"] }
 directories = "5"
 async-trait = "0.1"

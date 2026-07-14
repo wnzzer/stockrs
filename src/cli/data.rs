@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use chrono::Local;
 use clap::Subcommand;
 use comfy_table::Table;
 use tokio::sync::Semaphore;
@@ -55,7 +54,7 @@ async fn add(store: &mut Store, codes: Vec<String>) -> Result<()> {
             code: code.clone(),
             name,
             market,
-            added_at: Local::now().format("%Y-%m-%d").to_string(),
+            added_at: crate::utils::date::today(),
         };
         store.add_stock(&stock)?;
         let n = store.upsert_klines(&klines)?;
