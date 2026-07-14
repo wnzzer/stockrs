@@ -53,8 +53,9 @@ jobs:
             echo "tag=v$ver" >> "$GITHUB_OUTPUT"
             echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
+            # tag-push:tag 已存在。ref 必须是 SHA(target_commitish 不接受 tag 名)。
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
 
   build:
