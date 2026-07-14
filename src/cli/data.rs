@@ -45,9 +45,15 @@ async fn add(store: &mut Store, codes: Vec<String>) -> Result<()> {
     for code in codes {
         let market = infer_market(&code).ok_or_else(|| anyhow!("无法识别的股票代码 {}", code))?;
         let (name, klines, src) = source::fetch_klines(&code, market, "0", "20500101").await?;
+        // 腾讯/新浪日K不返回名称，回退用批量行情接口补名，避免名称落成代码
+        let name = if name.is_empty() {
+            resolve_name(&code, market).await
+        } else {
+            name
+        };
         let stock = Stock {
             code: code.clone(),
-            name: if name.is_empty() { code.clone() } else { name },
+            name,
             market,
             added_at: Local::now().format("%Y-%m-%d").to_string(),
         };
@@ -59,6 +65,16 @@ async fn add(store: &mut Store, codes: Vec<String>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// 用行情接口取股票/基金名称，失败则回退成代码本身。
+async fn resolve_name(code: &str, market: crate::data::Market) -> String {
+    match source::fetch_quotes(&[(code.to_string(), market)]).await {
+        Ok((qs, _)) if qs.first().is_some_and(|(q, _)| !q.name.is_empty()) => {
+            qs.into_iter().next().unwrap().0.name
+        }
+        _ => code.to_string(),
+    }
 }
 
 fn remove(store: &Store, code: &str) -> Result<()> {
