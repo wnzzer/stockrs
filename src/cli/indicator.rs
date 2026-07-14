@@ -59,6 +59,27 @@ pub fn run(code: String, period: usize) -> Result<()> {
         fmt(b.mid[last]),
         fmt(b.lower[last])
     );
+
+    // 基本面(最新一条,若已 data add/update 拉过)
+    if let Some(f) = store.get_fundamentals(&code, None, None)?.last() {
+        let fv = |v: Option<f64>| match v {
+            Some(x) => format!("{:.2}", x),
+            None => "--".to_string(),
+        };
+        let mv = match f.total_mv {
+            Some(v) => format!("{:.1}亿", v / 1e8),
+            None => "--".to_string(),
+        };
+        println!();
+        println!(
+            "PE(TTM): {}   PB: {}   PS(TTM): {}   总市值: {}   (截至 {})",
+            fv(f.pe_ttm),
+            fv(f.pb_mrq),
+            fv(f.ps_ttm),
+            mv,
+            f.date
+        );
+    }
     Ok(())
 }
 

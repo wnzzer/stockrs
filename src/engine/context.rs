@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::data::KLine;
+use crate::data::{fundamental, Fundamental, KLine};
 use crate::indicator;
 
 /// 一笔成交记录（回测内部）。
@@ -51,6 +51,11 @@ pub struct Inner {
     pub fees: Fees,
     /// 参数扫描注入的键值（供 ctx.param 读取）；普通回测为空。
     pub params: HashMap<String, f64>,
+    /// 基本面按 bar 对齐后的序列(与 klines 等长,无数据处 NaN)。
+    pub pe: Vec<f64>,
+    pub pb: Vec<f64>,
+    pub ps: Vec<f64>,
+    pub mv: Vec<f64>,
 }
 
 /// 传给 Rhai 策略的上下文句柄，内部共享可变状态。
@@ -58,14 +63,21 @@ pub struct Inner {
 pub struct Ctx(pub Arc<Mutex<Inner>>);
 
 impl Ctx {
-    pub fn new(klines: Vec<KLine>, capital: f64) -> Ctx {
-        Ctx::new_with_params(klines, capital, HashMap::new())
+    pub fn new(klines: Vec<KLine>, capital: f64, funda: &[Fundamental]) -> Ctx {
+        Ctx::new_with_params(klines, capital, HashMap::new(), funda)
     }
 
-    pub fn new_with_params(klines: Vec<KLine>, capital: f64, params: HashMap<String, f64>) -> Ctx {
+    pub fn new_with_params(
+        klines: Vec<KLine>,
+        capital: f64,
+        params: HashMap<String, f64>,
+        funda: &[Fundamental],
+    ) -> Ctx {
         let closes = klines.iter().map(|k| k.close).collect();
         let highs = klines.iter().map(|k| k.high).collect();
         let lows = klines.iter().map(|k| k.low).collect();
+        let dates: Vec<String> = klines.iter().map(|k| k.date.clone()).collect();
+        let a = fundamental::align(&dates, funda);
         Ctx(Arc::new(Mutex::new(Inner {
             klines,
             closes,
@@ -80,6 +92,10 @@ impl Ctx {
             equity: Vec::new(),
             fees: Fees::default(),
             params,
+            pe: a.pe,
+            pb: a.pb,
+            ps: a.ps,
+            mv: a.mv,
         })))
     }
 
@@ -207,6 +223,20 @@ impl Ctx {
     }
     pub fn param_f(&mut self, name: String, default: f64) -> f64 {
         self.with(|s| s.params.get(&name).copied().unwrap_or(default))
+    }
+
+    // ---- 基本面（按 bar 对齐，无数据 NaN）----
+    pub fn pe(&mut self) -> f64 {
+        self.with(|s| s.pe.get(s.i).copied().unwrap_or(f64::NAN))
+    }
+    pub fn pb(&mut self) -> f64 {
+        self.with(|s| s.pb.get(s.i).copied().unwrap_or(f64::NAN))
+    }
+    pub fn ps(&mut self) -> f64 {
+        self.with(|s| s.ps.get(s.i).copied().unwrap_or(f64::NAN))
+    }
+    pub fn mktcap(&mut self) -> f64 {
+        self.with(|s| s.mv.get(s.i).copied().unwrap_or(f64::NAN))
     }
 
     // ---- 下单（次日开盘成交）----

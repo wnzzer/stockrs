@@ -120,7 +120,7 @@ mod tests {
             k("d2", 10.0, 10.0),
             k("d3", 12.0, 12.0),
         ];
-        let ctx = Ctx::new(klines, 100_000.0);
+        let ctx = Ctx::new(klines, 100_000.0, &[]);
         let mut bar = 0;
         let c = ctx.clone();
         let res = run(&ctx, move || {

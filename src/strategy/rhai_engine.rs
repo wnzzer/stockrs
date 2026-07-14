@@ -38,6 +38,12 @@ pub fn build_engine() -> Engine {
     engine.register_fn("buy", Ctx::buy);
     engine.register_fn("sell", Ctx::sell);
 
+    // 基本面(无参 getter,与 ctx.close 同风格:ctx.pe / ctx.pb / ...)
+    engine.register_get("pe", Ctx::pe);
+    engine.register_get("pb", Ctx::pb);
+    engine.register_get("ps", Ctx::ps);
+    engine.register_get("mktcap", Ctx::mktcap);
+
     // 参数注入(i64/f64 按实参类型重载)
     engine.register_fn("param", Ctx::param_i);
     engine.register_fn("param", Ctx::param_f);
@@ -82,6 +88,12 @@ pub fn build_portfolio_engine() -> Engine {
     engine.register_fn("sell", PortfolioCtx::sell);
     engine.register_fn("order_target_pct", PortfolioCtx::order_target_pct_f);
     engine.register_fn("order_target_pct", PortfolioCtx::order_target_pct_i);
+
+    // 基本面(带 code 参数:pe(code) / pb(code) / ...)
+    engine.register_fn("pe", PortfolioCtx::pe);
+    engine.register_fn("pb", PortfolioCtx::pb);
+    engine.register_fn("ps", PortfolioCtx::ps);
+    engine.register_fn("mktcap", PortfolioCtx::mktcap);
 
     engine.register_fn("param", PortfolioCtx::param_i);
     engine.register_fn("param", PortfolioCtx::param_f);

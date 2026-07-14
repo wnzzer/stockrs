@@ -21,7 +21,7 @@ use rhai::{Array, Dynamic};
 
 use super::context::{Fees, TradeRec};
 use super::metrics::{self, Metrics};
-use crate::data::KLine;
+use crate::data::{fundamental, Fundamental, KLine};
 use crate::indicator;
 
 /// 一只股票的行情输入。
@@ -30,6 +30,7 @@ pub struct StockData {
     pub code: String,
     pub name: String,
     pub klines: Vec<KLine>,
+    pub funda: Vec<Fundamental>,
 }
 
 /// 组合内一笔成交记录。
@@ -84,6 +85,11 @@ struct Series {
     lows: Vec<f64>,
     closes: Vec<f64>,
     vols: Vec<f64>,
+    /// 基本面按自身 bar 对齐(无数据 NaN)。
+    pe: Vec<f64>,
+    pb: Vec<f64>,
+    ps: Vec<f64>,
+    mv: Vec<f64>,
     idx_by_date: HashMap<String, usize>,
     /// 指标缓存:key(如 "sma:5")→ 对齐到自身序列的 Vec<f64>(不足处 NaN)。
     cache: HashMap<String, Vec<f64>>,
@@ -148,6 +154,26 @@ impl PfInner {
             3 => s.closes[li],
             _ => s.vols[li],
         }
+    }
+
+    /// 当前 bar 某股基本面(0=pe 1=pb 2=ps 3=mv);停牌/未知/无数据 NaN。
+    fn funda(&self, code: &str, which: u8) -> f64 {
+        let si = match self.code_to_idx.get(code) {
+            Some(&s) => s,
+            None => return f64::NAN,
+        };
+        let li = match self.local_idx(si) {
+            Some(l) => l,
+            None => return f64::NAN,
+        };
+        let s = &self.series[si];
+        let arr = match which {
+            0 => &s.pe,
+            1 => &s.pb,
+            2 => &s.ps,
+            _ => &s.mv,
+        };
+        arr.get(li).copied().unwrap_or(f64::NAN)
     }
 
     fn close_at(&self, code: &str, n: i64) -> f64 {
@@ -535,6 +561,7 @@ impl PortfolioCtx {
             let mut lows = Vec::with_capacity(n);
             let mut closes = Vec::with_capacity(n);
             let mut vols = Vec::with_capacity(n);
+            let mut sdates = Vec::with_capacity(n);
             for (li, k) in sd.klines.iter().enumerate() {
                 idx_by_date.insert(k.date.clone(), li);
                 opens.push(k.open);
@@ -542,7 +569,9 @@ impl PortfolioCtx {
                 lows.push(k.low);
                 closes.push(k.close);
                 vols.push(k.volume);
+                sdates.push(k.date.clone());
             }
+            let a = fundamental::align(&sdates, &sd.funda);
             series.push(Series {
                 code: sd.code,
                 name: sd.name,
@@ -551,6 +580,10 @@ impl PortfolioCtx {
                 lows,
                 closes,
                 vols,
+                pe: a.pe,
+                pb: a.pb,
+                ps: a.ps,
+                mv: a.mv,
                 idx_by_date,
                 cache: HashMap::new(),
             });
@@ -655,6 +688,20 @@ impl PortfolioCtx {
     }
     pub fn max_shares(&mut self, code: String) -> i64 {
         self.with(|s| s.max_shares(&code))
+    }
+
+    // ---- 基本面（按 bar 对齐，无数据 NaN）----
+    pub fn pe(&mut self, code: String) -> f64 {
+        self.with(|s| s.funda(&code, 0))
+    }
+    pub fn pb(&mut self, code: String) -> f64 {
+        self.with(|s| s.funda(&code, 1))
+    }
+    pub fn ps(&mut self, code: String) -> f64 {
+        self.with(|s| s.funda(&code, 2))
+    }
+    pub fn mktcap(&mut self, code: String) -> f64 {
+        self.with(|s| s.funda(&code, 3))
     }
 
     // ---- 下单(次日开盘成交)----
@@ -787,6 +834,7 @@ mod tests {
             code: code.into(),
             name: code.into(),
             klines: bars.iter().map(|(d, o, c)| k(d, *o, *c)).collect(),
+            funda: Vec::new(),
         }
     }
 

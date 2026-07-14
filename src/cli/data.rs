@@ -62,6 +62,15 @@ async fn add(store: &mut Store, codes: Vec<String>) -> Result<()> {
             "已添加 {} {}，写入 {} 条日K（来源 {}）",
             stock.code, stock.name, n, src
         );
+        // 基本面(全量)。失败仅告警,不影响已写入的 K 线。
+        match crate::data::fundamental::fetch(&code, market, None).await {
+            Ok(f) if !f.is_empty() => {
+                let c = store.upsert_fundamentals(&f).unwrap_or(0);
+                println!("  基本面 {} 条(PE/PB/PS/市值)", c);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("  {} 基本面获取失败：{}", code, e),
+        }
     }
     Ok(())
 }
@@ -105,14 +114,16 @@ async fn update(store: &mut Store, codes: Vec<String>) -> Result<()> {
             Some(d) => d.replace('-', ""),
             None => "0".to_string(),
         };
-        jobs.push((stock, beg));
+        // 基本面增量起点(YYYY-MM-DD);None 则全量。
+        let fund_since = store.latest_fundamental_date(&stock.code)?;
+        jobs.push((stock, beg, fund_since));
     }
 
     // 有界并发拉取网络数据：Semaphore 限并发 + 抖动打散 + 指数退避重试。
     // 只并行网络 IO，SQLite 写入仍在主任务串行完成（rusqlite 连接非线程安全）。
     let sem = Arc::new(Semaphore::new(UPDATE_CONCURRENCY));
     let mut handles = Vec::with_capacity(jobs.len());
-    for (stock, beg) in jobs {
+    for (stock, beg, fund_since) in jobs {
         let sem = sem.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
@@ -121,12 +132,16 @@ async fn update(store: &mut Store, codes: Vec<String>) -> Result<()> {
                 source::fetch_klines(&stock.code, stock.market, &beg, "20500101")
             })
             .await;
-            (stock, fetched)
+            let funda = source::with_retry(3, || {
+                crate::data::fundamental::fetch(&stock.code, stock.market, fund_since.as_deref())
+            })
+            .await;
+            (stock, fetched, funda)
         }));
     }
 
     for handle in handles {
-        let (stock, fetched) = handle.await?;
+        let (stock, fetched, funda) = handle.await?;
         match fetched {
             Ok((_, klines, src)) => {
                 let n = store.upsert_klines(&klines)?;
@@ -136,6 +151,15 @@ async fn update(store: &mut Store, codes: Vec<String>) -> Result<()> {
                 );
             }
             Err(e) => eprintln!("{} {} 更新失败：{}", stock.code, stock.name, e),
+        }
+        // 基本面失败不阻断 K 线结果。
+        match funda {
+            Ok(f) if !f.is_empty() => {
+                let c = store.upsert_fundamentals(&f).unwrap_or(0);
+                println!("  {} 基本面更新 {} 条", stock.code, c);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("  {} 基本面更新失败：{}", stock.code, e),
         }
     }
     Ok(())

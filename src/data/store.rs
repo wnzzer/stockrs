@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use super::models::{infer_market, KLine, Market, Position, Stock, Trade};
+use super::models::{infer_market, Fundamental, KLine, Market, Position, Stock, Trade};
 
 pub struct Store {
     conn: Connection,
@@ -67,6 +67,15 @@ impl Store {
                 date TEXT NOT NULL,
                 note TEXT
             );
+            CREATE TABLE IF NOT EXISTS fundamentals (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                pe_ttm REAL,
+                pb_mrq REAL,
+                ps_ttm REAL,
+                total_mv REAL,
+                PRIMARY KEY (code, date)
+            );
             "#,
         )?;
         Ok(())
@@ -93,6 +102,8 @@ impl Store {
             .execute("DELETE FROM stocks WHERE code = ?1", params![code])?;
         self.conn
             .execute("DELETE FROM klines WHERE code = ?1", params![code])?;
+        self.conn
+            .execute("DELETE FROM fundamentals WHERE code = ?1", params![code])?;
         Ok(n > 0)
     }
 
@@ -208,6 +219,73 @@ impl Store {
         }
     }
 
+    // ---- fundamentals ----
+
+    pub fn upsert_fundamentals(&mut self, rows: &[Fundamental]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO fundamentals
+                 (code, date, pe_ttm, pb_mrq, ps_ttm, total_mv)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for f in rows {
+                stmt.execute(params![
+                    f.code, f.date, f.pe_ttm, f.pb_mrq, f.ps_ttm, f.total_mv
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(rows.len())
+    }
+
+    /// 返回指定股票的基本面,按日期升序(PIT 对齐依赖升序)。可选起止日期过滤。
+    pub fn get_fundamentals(
+        &self,
+        code: &str,
+        start: Option<&str>,
+        end: Option<&str>,
+    ) -> Result<Vec<Fundamental>> {
+        let mut sql = String::from(
+            "SELECT code, date, pe_ttm, pb_mrq, ps_ttm, total_mv
+             FROM fundamentals WHERE code = ?1",
+        );
+        if start.is_some() {
+            sql.push_str(" AND date >= ?2");
+        }
+        if end.is_some() {
+            sql.push_str(if start.is_some() {
+                " AND date <= ?3"
+            } else {
+                " AND date <= ?2"
+            });
+        }
+        sql.push_str(" ORDER BY date ASC");
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut binds: Vec<&dyn rusqlite::ToSql> = vec![&code];
+        if let Some(s) = start.as_ref() {
+            binds.push(s);
+        }
+        if let Some(e) = end.as_ref() {
+            binds.push(e);
+        }
+        let rows = stmt.query_map(binds.as_slice(), |row| Ok(row_to_fundamental(row)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r??);
+        }
+        Ok(out)
+    }
+
+    pub fn latest_fundamental_date(&self, code: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT MAX(date) FROM fundamentals WHERE code = ?1")?;
+        let date: Option<String> = stmt.query_row(params![code], |row| row.get(0))?;
+        Ok(date)
+    }
+
     // ---- portfolio ----
 
     pub fn add_position(
@@ -305,5 +383,16 @@ fn row_to_kline(row: &rusqlite::Row) -> Result<KLine> {
         volume: row.get(6)?,
         amount: row.get(7)?,
         turnover: row.get(8)?,
+    })
+}
+
+fn row_to_fundamental(row: &rusqlite::Row) -> Result<Fundamental> {
+    Ok(Fundamental {
+        code: row.get(0)?,
+        date: row.get(1)?,
+        pe_ttm: row.get(2)?,
+        pb_mrq: row.get(3)?,
+        ps_ttm: row.get(4)?,
+        total_mv: row.get(5)?,
     })
 }

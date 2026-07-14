@@ -92,6 +92,8 @@ async fn run_single(
     if klines.len() < 2 {
         bail!("{} 本地数据不足，请先 data add / update", code);
     }
+    // 基本面(缺失则全 NaN,不影响回测);参数扫描各 combo 复用同一份。
+    let funda = store.get_fundamentals(&code, start.as_deref(), end.as_deref())?;
     let dates: Vec<String> = klines.iter().map(|k| k.date.clone()).collect();
     let period_start = dates.first().cloned().unwrap_or_default();
     let period_end = dates.last().cloned().unwrap_or_default();
@@ -99,7 +101,7 @@ async fn run_single(
     let strat_name = strategy.name();
 
     if grid.is_empty() {
-        let ctx = Ctx::new(klines, capital);
+        let ctx = Ctx::new(klines, capital, &funda);
         let result = run_single_ctx(&ctx, &strategy)?;
         let strat_equity = ctx.equity_curve();
         let bench = fetch_bench_equity(
@@ -125,7 +127,7 @@ async fn run_single(
     } else {
         let mut rows: Vec<(HashMap<String, f64>, Metrics)> = Vec::new();
         for combo in combos {
-            let ctx = Ctx::new_with_params(klines.clone(), capital, combo.clone());
+            let ctx = Ctx::new_with_params(klines.clone(), capital, combo.clone(), &funda);
             let result = run_single_ctx(&ctx, &strategy)?;
             rows.push((combo, result.metrics));
         }
@@ -166,10 +168,12 @@ async fn run_portfolio(
             eprintln!("跳过 {}：本地数据不足", code);
             continue;
         }
+        let funda = store.get_fundamentals(code, start.as_deref(), end.as_deref())?;
         data.push(StockData {
             code: code.clone(),
             name,
             klines: ks,
+            funda,
         });
     }
     if data.is_empty() {

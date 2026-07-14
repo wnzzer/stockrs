@@ -11,6 +11,7 @@
 - 📊 多数据源容灾：东方财富为主，腾讯、新浪自动故障切换，无需 API Key
 - 💾 SQLite 单文件存储，零部署
 - 📈 内置技术指标：MA / EMA / RSI / MACD / KDJ / BOLL
+- 💹 基本面数据：历史日度 PE / PB / PS / 总市值，支持技术面 + 基本面双重验证回测
 - 🧪 Rhai 嵌入式脚本策略引擎，回测避免未来函数（次日开盘成交）
 - 💰 手续费/印花税建模，输出收益、回撤、夏普、胜率等绩效指标
 - 📁 持仓管理与实时盈亏
@@ -96,6 +97,7 @@ fn on_bar(ctx) {
 | 历史 | `ctx.close_at(n)` `ctx.sma_at(period, n)` |
 | 指标 | `ctx.sma(p)` `ctx.ema(p)` `ctx.rsi(p)` `ctx.macd(f,s,sig)` `ctx.kdj(p)` `ctx.boll(p,mult)` |
 | 账户 | `ctx.position()` `ctx.cash()` `ctx.total_value()` `ctx.max_shares()` |
+| 基本面 | `ctx.pe` `ctx.pb` `ctx.ps` `ctx.mktcap`（按 bar 对齐，无数据 NaN） |
 | 交易 | `ctx.buy(price, shares)` `ctx.sell(price, shares)` |
 
 `macd` / `kdj` / `boll` 返回长度为 3 的数组。指标数据不足时返回 `NaN`，脚本可用 `x != x` 判断。
@@ -120,6 +122,7 @@ stockrs backtest strategies/momentum_rotation.rhai --universe
 | 行情 | `ctx.close(code)` `ctx.open/high/low/volume(code)` `ctx.close_at(code, n)` |
 | 指标 | `ctx.sma(code, p)` `ctx.ema/rsi(code, p)` `ctx.macd(code,f,s,sig)` `ctx.kdj(code,p)` `ctx.boll(code,p,mult)` |
 | 账户 | `ctx.position(code)` `ctx.avg_cost(code)` `ctx.cash()` `ctx.total_value()` `ctx.max_shares(code)` |
+| 基本面 | `ctx.pe(code)` `ctx.pb(code)` `ctx.ps(code)` `ctx.mktcap(code)` |
 | 交易 | `ctx.buy(code, shares)` `ctx.sell(code, shares)` `ctx.order_target_pct(code, pct)` 再平衡到目标权重 |
 
 日期轴取股票池的**并集**，某股停牌当日按最近收盘估值；`rank` 只对当日活跃、
@@ -127,6 +130,23 @@ stockrs backtest strategies/momentum_rotation.rhai --universe
 
 > 注意 rhai 区分整数与浮点：`order_target_pct` / `boll` 的浮点参数在脚本里要写小数
 > （`0.5`、`2.0`），周期类参数写整数。
+
+## 基本面数据（PE/PB）
+
+`data add` / `data update` 会一并拉取历史日度估值(东财 datacenter,PE-TTM / PB-MRQ / PS-TTM / 总市值,约 8 年),存入本地库并增量维护。
+
+- **回测里按 bar 无未来函数对齐**:在第 t 根 K 线只能读到第 t 天(或之前最近一天)的估值(on-or-before carry-forward),不会用未来数据。无数据处为 `NaN`,亏损股 PE 为负。
+- 单标的策略用无参 `ctx.pe` / `ctx.pb` / `ctx.ps` / `ctx.mktcap`;组合策略用带 code 的 `ctx.pb(code)` 等。
+- `indicator` 命令会显示最新 PE/PB/PS/总市值。
+
+**双重验证示例**:技术面信号叠加基本面过滤——
+
+```bash
+# 单标的:金叉且 PB 低于阈值才买
+stockrs backtest strategies/value_sma.rhai --stock 600519 --param pb_max=3,5,8 --optimize sharpe
+# 组合:在低 PB 股票池里按动量轮动
+stockrs backtest strategies/value_momentum.rhai --universe --param top_n=2,3 --param pb_max=3,5
+```
 
 ## 基准对比
 

@@ -63,6 +63,12 @@ pub fn secid(code: &str, market: Market) -> String {
     format!("{}.{}", market.secid_prefix(), code)
 }
 
+/// 东财 datacenter 基本面接口用的 SECUCODE，如 "600519.SH" / "000858.SZ"。
+/// 注意与 secid 格式完全不同(secid 是 "1.600519")。
+pub fn secu_code(code: &str, market: Market) -> String {
+    format!("{}.{}", code, market.as_str())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KLine {
     pub code: String,
@@ -74,6 +80,18 @@ pub struct KLine {
     pub volume: f64,
     pub amount: f64,
     pub turnover: Option<f64>,
+}
+
+/// 单日基本面估值(来自东财 datacenter)。字段可为 None:亏损股 PE 为负(仍是 Some),
+/// 真正缺失/无数据时为 None——不要用 0.0 代替 None。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fundamental {
+    pub code: String,
+    pub date: String, // YYYY-MM-DD
+    pub pe_ttm: Option<f64>,
+    pub pb_mrq: Option<f64>,
+    pub ps_ttm: Option<f64>,
+    pub total_mv: Option<f64>, // 总市值(元)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,5 +151,11 @@ mod tests {
     fn secid_format() {
         assert_eq!(secid("161226", Market::SZ), "0.161226");
         assert_eq!(secid("600519", Market::SH), "1.600519");
+    }
+
+    #[test]
+    fn secu_code_format() {
+        assert_eq!(secu_code("600519", Market::SH), "600519.SH");
+        assert_eq!(secu_code("000858", Market::SZ), "000858.SZ");
     }
 }
