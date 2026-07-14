@@ -6,20 +6,31 @@ description = "轻量 A 股量化 CLI 工具"
 license = "MIT"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
+# 关掉 clap 的 color/suggestions（省 anstream/anstyle/strsim）
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# rustls-tls-webpki-roots 走 ring + 内置根证书，避开庞大的 aws-lc-sys(C 库)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
-comfy-table = "7"
+# 关掉 tty 特性，去掉 crossterm 依赖（不做终端宽度自适应）
+comfy-table = { version = "7", default-features = false }
 chrono = "0.4"
 rhai = { version = "1.19", features = ["sync"] }
 directories = "5"
 async-trait = "0.1"
 encoding_rs = "0.8"
-self_update = { version = "0.44.0", default-features = false, features = ["reqwest", "rustls", "archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
+
+# self_update 用 ureq 后端(自带 ring)，避免 reqwest 的 rustls feature 把 aws-lc-rs 拖进来。
+# 非 Windows 只需 tar.gz，去掉 zip/zopfli 压缩栈。
+[target.'cfg(not(windows))'.dependencies]
+self_update = { version = "0.44.0", default-features = false, features = ["ureq", "rustls", "archive-tar", "compression-flate2"] }
+
+# Windows 发布包是 .zip，保留 zip 支持
+[target.'cfg(windows)'.dependencies]
+self_update = { version = "0.44.0", default-features = false, features = ["ureq", "rustls", "archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
 
 [profile.release]
 opt-level = "z"     # 优化体积
