@@ -1,16 +1,61 @@
 name: Release
 
+# 两种触发方式:
+#   1) 手动一键发版(推荐):Actions 页 Run workflow 填版本号,或
+#      `gh workflow run release.yml -f version=0.3.1`
+#      —— 服务端自动 bump 版本号、提交、编译、打 tag 并发布,本地零操作。
+#   2) 兼容旧流程:手动 push 一个 v* tag 也会触发。
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号(如 0.3.1,可含或不含前缀 v)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
+  # 解析出本次发布的 tag 与要编译的 git ref;手动触发时顺便 bump 版本号并提交到 main。
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+
+      - name: Resolve tag / bump version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ver="${{ inputs.version }}"
+            ver="${ver#v}"   # 去掉可能的前缀 v
+            # bump Cargo.toml 的 [package] version(首个 version= 行)
+            sed -i "0,/^version = /s//version = \"$ver\"/" Cargo.toml
+            # 同步 Cargo.lock 里 stockrs 包的版本
+            sed -i "/^name = \"stockrs\"/{n;s/^version = .*/version = \"$ver\"/}" Cargo.lock
+            git config user.name "wnzzer"
+            git config user.email "wnzzer@outlook.com"
+            git add Cargo.toml Cargo.lock
+            git commit -m "chore: 版本号 → $ver"
+            git push origin HEAD:main
+            echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+            echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: build ${{ matrix.target }}
+    needs: prep
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -28,6 +73,8 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prep.outputs.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -86,7 +133,7 @@ jobs:
 
   release:
     name: publish release
-    needs: build
+    needs: [prep, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -95,8 +142,12 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # tag_name 不存在时,action-gh-release 会用 GITHUB_TOKEN 在 target_commitish 上
+      # 创建该 tag(GITHUB_TOKEN 触发的事件不会再触发本工作流,故不会二次发布)。
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prep.outputs.tag }}
+          target_commitish: ${{ needs.prep.outputs.ref }}
           files: dist/*
           generate_release_notes: true
