@@ -3,6 +3,7 @@ pub mod data;
 pub mod indicator;
 pub mod portfolio;
 pub mod quote;
+pub mod selfupdate;
 
 use clap::{Parser, Subcommand};
 
@@ -49,6 +50,14 @@ pub enum Commands {
     /// 持仓管理
     #[command(subcommand)]
     Portfolio(portfolio::PortfolioCmd),
+
+    /// 更新 stockrs 自身到最新版本
+    #[command(name = "self-update")]
+    SelfUpdate {
+        /// 只检查是否有新版本，不实际更新
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
@@ -64,5 +73,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             capital,
         } => backtest::run(script, stock, start, end, capital),
         Commands::Portfolio(cmd) => portfolio::run(cmd).await,
+        Commands::SelfUpdate { check } => selfupdate::run(check).await,
     }
 }

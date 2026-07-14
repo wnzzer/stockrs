@@ -60,6 +60,8 @@ stockrs portfolio history
 | `indicator <code> [--period N]` | 最新技术指标 |
 | `backtest <script> --stock <code> [--start --end --capital]` | 回测 |
 | `portfolio add/remove/list/history` | 持仓管理 |
+| `portfolio stats <code>` | 持仓收益分析（曲线/回撤/日均收益） |
+| `self-update [--check]` | 更新 stockrs 自身到最新版本 |
 
 ## 策略脚本
 
