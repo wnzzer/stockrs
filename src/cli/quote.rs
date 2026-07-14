@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use comfy_table::Table;
 
-use crate::data::models::infer_market;
+use crate::data::models::normalize_code;
 use crate::data::source;
 
 pub async fn run(codes: Vec<String>) -> Result<()> {
@@ -9,9 +9,10 @@ pub async fn run(codes: Vec<String>) -> Result<()> {
         return Err(anyhow!("请提供至少一个股票代码"));
     }
     let mut reqs = Vec::with_capacity(codes.len());
-    for code in &codes {
-        let market = infer_market(code).ok_or_else(|| anyhow!("无法识别的股票代码 {}", code))?;
-        reqs.push((code.clone(), market));
+    for input in &codes {
+        let (code, market) =
+            normalize_code(input).ok_or_else(|| anyhow!("无法识别的代码 {}", input))?;
+        reqs.push((code, market));
     }
 
     let (quotes, failed) = source::fetch_quotes(&reqs).await?;

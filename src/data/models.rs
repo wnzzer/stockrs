@@ -12,6 +12,7 @@ pub struct Stock {
 pub enum Market {
     SH,
     SZ,
+    HK,
 }
 
 impl Market {
@@ -19,6 +20,7 @@ impl Market {
         match self {
             Market::SH => "SH",
             Market::SZ => "SZ",
+            Market::HK => "HK",
         }
     }
 
@@ -26,15 +28,17 @@ impl Market {
         match s {
             "SH" => Some(Market::SH),
             "SZ" => Some(Market::SZ),
+            "HK" => Some(Market::HK),
             _ => None,
         }
     }
 
-    /// 东财 secid 的市场前缀：沪市 1，深市 0。
+    /// 东财 secid 的市场前缀：沪市 1，深市 0，港股 116。
     pub fn secid_prefix(&self) -> u8 {
         match self {
             Market::SH => 1,
             Market::SZ => 0,
+            Market::HK => 116,
         }
     }
 }
@@ -58,7 +62,29 @@ pub fn infer_market(code: &str) -> Option<Market> {
     }
 }
 
-/// 东财请求用的 secid，如 "1.600519"。
+/// 把用户输入归一为 (标准代码, 市场)。
+/// 港股:`hk` 前缀 / `.HK` 后缀 / ≤5 位纯数字 → 补零到 5 位 + HK(A股/基金均为 6 位,无冲突);
+/// 6 位 → infer_market;其余 None。用于 CLI 入口识别港股 vs A股。
+pub fn normalize_code(input: &str) -> Option<(String, Market)> {
+    let up = input.trim().to_uppercase();
+    let hk_explicit = up.starts_with("HK") || up.ends_with(".HK");
+    let digits: String = up.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    if hk_explicit || digits.len() <= 5 {
+        if digits.len() > 5 {
+            return None; // 港股代码最多 5 位
+        }
+        Some((format!("{:0>5}", digits), Market::HK))
+    } else if digits.len() == 6 {
+        infer_market(&digits).map(|m| (digits, m))
+    } else {
+        None
+    }
+}
+
+/// 东财请求用的 secid，如 "1.600519" / "116.00700"。
 pub fn secid(code: &str, market: Market) -> String {
     format!("{}.{}", market.secid_prefix(), code)
 }
@@ -160,5 +186,36 @@ mod tests {
     fn secu_code_format() {
         assert_eq!(secu_code("600519", Market::SH), "600519.SH");
         assert_eq!(secu_code("000858", Market::SZ), "000858.SZ");
+    }
+
+    #[test]
+    fn hk_secid_and_normalize() {
+        assert_eq!(secid("00700", Market::HK), "116.00700");
+        // A股 6 位
+        assert_eq!(
+            normalize_code("600519"),
+            Some(("600519".into(), Market::SH))
+        );
+        assert_eq!(
+            normalize_code("000858"),
+            Some(("000858".into(), Market::SZ))
+        );
+        // 港股:显式前缀/后缀、5 位、补零
+        assert_eq!(
+            normalize_code("hk00700"),
+            Some(("00700".into(), Market::HK))
+        );
+        assert_eq!(
+            normalize_code("00700.HK"),
+            Some(("00700".into(), Market::HK))
+        );
+        assert_eq!(normalize_code("00700"), Some(("00700".into(), Market::HK)));
+        assert_eq!(normalize_code("700"), Some(("00700".into(), Market::HK))); // 补零到5位
+                                                                               // 6 位深市不会被误判成港股
+        assert_eq!(
+            normalize_code("000700"),
+            Some(("000700".into(), Market::SZ))
+        );
+        assert!(normalize_code("abc").is_none());
     }
 }

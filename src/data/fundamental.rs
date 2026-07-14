@@ -16,6 +16,10 @@ const PAGE_SIZE: usize = 5000;
 
 /// 拉取某股历史估值。since 为 "YYYY-MM-DD" 时只取该日(含)之后,用于增量。
 pub async fn fetch(code: &str, market: Market, since: Option<&str>) -> Result<Vec<Fundamental>> {
+    // 港股不在 A 股 RPT_VALUEANALYSIS_DET 表里(会永远返回空),后续阶段另接 HK F10 源。
+    if market == Market::HK {
+        return Ok(Vec::new());
+    }
     let secu = secu_code(code, market);
     // 日期值必须单引号包裹;多个括号子句是 AND。reqwest .query() 会正确百分号编码。
     let mut filter = format!("(SECUCODE=\"{}\")", secu);

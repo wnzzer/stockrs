@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 use clap::Subcommand;
 use comfy_table::Table;
 
-use crate::data::models::infer_market;
+use crate::data::models::normalize_code;
 use crate::data::source;
 use crate::data::Store;
 use crate::engine::position_stats;
@@ -82,7 +82,7 @@ async fn list(store: &Store) -> Result<()> {
     // 一次批量拉取所有持仓的实时价，避免逐只请求
     let reqs: Vec<(String, crate::data::Market)> = positions
         .iter()
-        .filter_map(|p| infer_market(&p.code).map(|m| (p.code.clone(), m)))
+        .filter_map(|p| normalize_code(&p.code))
         .collect();
     let prices: std::collections::HashMap<String, f64> = source::fetch_quotes(&reqs)
         .await

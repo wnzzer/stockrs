@@ -5,7 +5,7 @@ use clap::Subcommand;
 use comfy_table::Table;
 use tokio::sync::Semaphore;
 
-use crate::data::models::{infer_market, Stock};
+use crate::data::models::{normalize_code, Stock};
 use crate::data::source;
 use crate::data::Store;
 
@@ -41,8 +41,9 @@ async fn add(store: &mut Store, codes: Vec<String>) -> Result<()> {
     if codes.is_empty() {
         return Err(anyhow!("请提供至少一个股票代码"));
     }
-    for code in codes {
-        let market = infer_market(&code).ok_or_else(|| anyhow!("无法识别的股票代码 {}", code))?;
+    for input in codes {
+        let (code, market) =
+            normalize_code(&input).ok_or_else(|| anyhow!("无法识别的代码 {}", input))?;
         let (name, klines, src) = source::fetch_klines(&code, market, "0", "20500101").await?;
         // 腾讯/新浪日K不返回名称，回退用批量行情接口补名，避免名称落成代码
         let name = if name.is_empty() {

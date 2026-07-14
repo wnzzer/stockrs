@@ -11,6 +11,8 @@ fn prefix(m: Market) -> &'static str {
     match m {
         Market::SH => "sh",
         Market::SZ => "sz",
+        // 港股实际由东财/腾讯覆盖,新浪仅兜底(rt_hk 实时;新浪港股日K不支持)
+        Market::HK => "rt_hk",
     }
 }
 

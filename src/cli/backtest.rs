@@ -5,7 +5,8 @@ use comfy_table::Table;
 use rhai::Scope;
 
 use crate::data::benchmark;
-use crate::data::{KLine, Store};
+use crate::data::models::normalize_code;
+use crate::data::{KLine, Market, Store};
 use crate::engine::context::TradeRec;
 use crate::engine::metrics::{Benchmark, Metrics};
 use crate::engine::portfolio::{self, PfTrade, PortfolioCtx, PortfolioResult, StockData};
@@ -84,6 +85,12 @@ async fn run_single(
     combos: Vec<HashMap<String, f64>>,
     optimize: Option<String>,
 ) -> Result<()> {
+    let (code, market) = normalize_code(&code).ok_or_else(|| anyhow!("无法识别的代码 {}", code))?;
+    if market == Market::HK {
+        eprintln!(
+            "⚠️ 港股回测暂用 A 股规则(每手 100 股 / A 股费率),数字仅供参考;正确港股规则见后续版本"
+        );
+    }
     let name = store
         .get_stock(&code)?
         .map(|s| s.name)
@@ -158,23 +165,36 @@ async fn run_portfolio(
     optimize: Option<String>,
 ) -> Result<()> {
     let mut data: Vec<StockData> = Vec::new();
-    for code in &codes {
+    let mut has_hk = false;
+    for input in &codes {
+        let Some((code, market)) = normalize_code(input) else {
+            eprintln!("跳过 {}：无法识别的代码", input);
+            continue;
+        };
+        if market == Market::HK {
+            has_hk = true;
+        }
         let name = store
-            .get_stock(code)?
+            .get_stock(&code)?
             .map(|s| s.name)
             .unwrap_or_else(|| code.clone());
-        let ks = store.get_klines(code, start.as_deref(), end.as_deref())?;
+        let ks = store.get_klines(&code, start.as_deref(), end.as_deref())?;
         if ks.len() < 2 {
             eprintln!("跳过 {}：本地数据不足", code);
             continue;
         }
-        let funda = store.get_fundamentals(code, start.as_deref(), end.as_deref())?;
+        let funda = store.get_fundamentals(&code, start.as_deref(), end.as_deref())?;
         data.push(StockData {
-            code: code.clone(),
+            code,
             name,
             klines: ks,
             funda,
         });
+    }
+    if has_hk {
+        eprintln!(
+            "⚠️ 港股回测暂用 A 股规则(每手 100 股 / A 股费率),数字仅供参考;正确港股规则见后续版本"
+        );
     }
     if data.is_empty() {
         bail!("组合中无可用股票数据，请先 data add / update");

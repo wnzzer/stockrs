@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Result};
 
+use crate::data::models::normalize_code;
 use crate::data::Store;
 use crate::indicator;
 
 pub fn run(code: String, period: usize) -> Result<()> {
+    let (code, _market) =
+        normalize_code(&code).ok_or_else(|| anyhow!("无法识别的代码 {}", code))?;
     let store = Store::open_default()?;
     let klines = store.get_klines(&code, None, None)?;
     if klines.is_empty() {

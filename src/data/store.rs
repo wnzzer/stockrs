@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
-use super::models::{infer_market, Fundamental, KLine, Market, Position, Stock, Trade};
+use super::models::{normalize_code, Fundamental, KLine, Market, Position, Stock, Trade};
 
 pub struct Store {
     conn: Connection,
@@ -362,7 +362,7 @@ impl Store {
 fn row_to_stock(row: &rusqlite::Row) -> Result<Stock> {
     let market_str: String = row.get(2)?;
     let market = Market::from_str(&market_str)
-        .or_else(|| infer_market(&row.get::<_, String>(0).unwrap_or_default()))
+        .or_else(|| normalize_code(&row.get::<_, String>(0).unwrap_or_default()).map(|(_, m)| m))
         .context("未知市场")?;
     Ok(Stock {
         code: row.get(0)?,

@@ -11,6 +11,7 @@ fn prefix(m: Market) -> &'static str {
     match m {
         Market::SH => "sh",
         Market::SZ => "sz",
+        Market::HK => "hk",
     }
 }
 
@@ -23,8 +24,9 @@ fn dash_date(s: &str) -> String {
 }
 
 /// 解析单条 `v_XXX="1~名称~代码~..."` 的引号内内容为 Quote。
-/// 3 现价,4 昨收,5 今开,6 成交量(手),33 最高,34 最低,37 成交额(万),38 换手率(%)
-fn parse_line(code: &str, inner: &str) -> Option<Quote> {
+/// 3 现价,4 昨收,5 今开,6 成交量,33 最高,34 最低,37 成交额,38 换手率(%)
+/// A股成交额单位是万元(×10000);港股 field[37] 已是原始 HKD,不乘。
+fn parse_line(code: &str, inner: &str, is_hk: bool) -> Option<Quote> {
     let f: Vec<&str> = inner.split('~').collect();
     if f.len() < 6 || f[3].is_empty() {
         return None;
@@ -48,7 +50,15 @@ fn parse_line(code: &str, inner: &str) -> Option<Quote> {
             0.0
         },
         volume: g(6),
-        amount: if f.len() > 37 { g(37) * 10000.0 } else { 0.0 },
+        amount: if f.len() > 37 {
+            if is_hk {
+                g(37)
+            } else {
+                g(37) * 10000.0
+            }
+        } else {
+            0.0
+        },
         turnover: f.get(38).and_then(|s| s.parse::<f64>().ok()),
         pe: None,
         pb: None,
@@ -95,14 +105,14 @@ impl QuoteSource for Tencent {
             else {
                 continue;
             };
-            let code = sym.get(2..).unwrap_or(sym); // 去掉 sh/sz 前缀
+            let code = sym.get(2..).unwrap_or(sym); // 去掉 sh/sz/hk 前缀
             let Some(inner) = line
                 .split_once('"')
                 .and_then(|(_, r)| r.rsplit_once('"').map(|(l, _)| l))
             else {
                 continue;
             };
-            if let Some(q) = parse_line(code, inner) {
+            if let Some(q) = parse_line(code, inner, sym.starts_with("hk")) {
                 out.push(q);
             }
         }
