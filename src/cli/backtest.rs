@@ -10,7 +10,7 @@ use crate::data::{KLine, Market, Store};
 use crate::engine::context::TradeRec;
 use crate::engine::metrics::{Benchmark, Metrics};
 use crate::engine::portfolio::{self, PfTrade, PortfolioCtx, PortfolioResult, StockData};
-use crate::engine::{self, Ctx};
+use crate::engine::{self, Ctx, FeeModel};
 use crate::strategy::Strategy;
 use crate::utils::format::{money, pad_end};
 
@@ -86,15 +86,10 @@ async fn run_single(
     optimize: Option<String>,
 ) -> Result<()> {
     let (code, market) = normalize_code(&code).ok_or_else(|| anyhow!("无法识别的代码 {}", code))?;
-    if market == Market::HK {
-        eprintln!(
-            "⚠️ 港股回测暂用 A 股规则(每手 100 股 / A 股费率),数字仅供参考;正确港股规则见后续版本"
-        );
-    }
-    let name = store
-        .get_stock(&code)?
-        .map(|s| s.name)
-        .unwrap_or_else(|| code.clone());
+    let stock = store.get_stock(&code)?;
+    let lot = stock.as_ref().map(|s| s.lot_size).unwrap_or(100);
+    let name = stock.map(|s| s.name).unwrap_or_else(|| code.clone());
+    let fee = FeeModel::for_market(market);
     let klines = store.get_klines(&code, start.as_deref(), end.as_deref())?;
     if klines.len() < 2 {
         bail!("{} 本地数据不足，请先 data add / update", code);
@@ -108,7 +103,7 @@ async fn run_single(
     let strat_name = strategy.name();
 
     if grid.is_empty() {
-        let ctx = Ctx::new(klines, capital, &funda);
+        let ctx = Ctx::new(klines, capital, &funda, lot, fee.clone());
         let result = run_single_ctx(&ctx, &strategy)?;
         let strat_equity = ctx.equity_curve();
         let bench = fetch_bench_equity(
@@ -134,7 +129,14 @@ async fn run_single(
     } else {
         let mut rows: Vec<(HashMap<String, f64>, Metrics)> = Vec::new();
         for combo in combos {
-            let ctx = Ctx::new_with_params(klines.clone(), capital, combo.clone(), &funda);
+            let ctx = Ctx::new_with_params(
+                klines.clone(),
+                capital,
+                combo.clone(),
+                &funda,
+                lot,
+                fee.clone(),
+            );
             let result = run_single_ctx(&ctx, &strategy)?;
             rows.push((combo, result.metrics));
         }
@@ -165,45 +167,45 @@ async fn run_portfolio(
     optimize: Option<String>,
 ) -> Result<()> {
     let mut data: Vec<StockData> = Vec::new();
-    let mut has_hk = false;
+    let mut markets: Vec<Market> = Vec::new();
     for input in &codes {
         let Some((code, market)) = normalize_code(input) else {
             eprintln!("跳过 {}：无法识别的代码", input);
             continue;
         };
-        if market == Market::HK {
-            has_hk = true;
-        }
-        let name = store
-            .get_stock(&code)?
-            .map(|s| s.name)
-            .unwrap_or_else(|| code.clone());
+        let stock = store.get_stock(&code)?;
+        let lot = stock.as_ref().map(|s| s.lot_size).unwrap_or(100);
+        let name = stock.map(|s| s.name).unwrap_or_else(|| code.clone());
         let ks = store.get_klines(&code, start.as_deref(), end.as_deref())?;
         if ks.len() < 2 {
             eprintln!("跳过 {}：本地数据不足", code);
             continue;
         }
         let funda = store.get_fundamentals(&code, start.as_deref(), end.as_deref())?;
+        markets.push(market);
         data.push(StockData {
             code,
             name,
             klines: ks,
             funda,
+            lot,
         });
-    }
-    if has_hk {
-        eprintln!(
-            "⚠️ 港股回测暂用 A 股规则(每手 100 股 / A 股费率),数字仅供参考;正确港股规则见后续版本"
-        );
     }
     if data.is_empty() {
         bail!("组合中无可用股票数据，请先 data add / update");
     }
+    // 货币隔离:同一组合不能混 A股(CNY)与港股(HKD)。
+    let has_hk = markets.contains(&Market::HK);
+    let has_cny = markets.iter().any(|m| *m != Market::HK);
+    if has_hk && has_cny {
+        bail!("港股(HKD)与 A股(CNY)不能在同一组合回测(货币不同),请分开跑");
+    }
+    let fee = FeeModel::for_market(if has_hk { Market::HK } else { Market::SH });
     let strategy = Strategy::load_portfolio(script)?;
     let strat_name = strategy.name();
 
     if grid.is_empty() {
-        let ctx = PortfolioCtx::new(data, capital, HashMap::new());
+        let ctx = PortfolioCtx::new(data, capital, HashMap::new(), fee.clone());
         let dates = ctx.dates();
         let result = run_portfolio_ctx(&ctx, &strategy)?;
         let bench = fetch_bench_equity(
@@ -222,7 +224,7 @@ async fn run_portfolio(
         let (period_start, period_end) = period_of(&data);
         let mut rows: Vec<(HashMap<String, f64>, Metrics)> = Vec::new();
         for combo in combos {
-            let ctx = PortfolioCtx::new(data.clone(), capital, combo.clone());
+            let ctx = PortfolioCtx::new(data.clone(), capital, combo.clone(), fee.clone());
             let result = run_portfolio_ctx(&ctx, &strategy)?;
             rows.push((combo, result.metrics));
         }

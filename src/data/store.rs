@@ -36,7 +36,8 @@ impl Store {
                 code TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 market TEXT NOT NULL,
-                added_at TEXT NOT NULL
+                added_at TEXT NOT NULL,
+                lot_size INTEGER NOT NULL DEFAULT 100
             );
             CREATE TABLE IF NOT EXISTS klines (
                 code TEXT NOT NULL,
@@ -78,6 +79,18 @@ impl Store {
             );
             "#,
         )?;
+        // 迁移:老库 stocks 表补 lot_size 列(SQLite 无 ADD COLUMN IF NOT EXISTS)。
+        let has_lot: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('stocks') WHERE name = 'lot_size'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_lot == 0 {
+            self.conn.execute(
+                "ALTER TABLE stocks ADD COLUMN lot_size INTEGER NOT NULL DEFAULT 100",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -85,12 +98,14 @@ impl Store {
 
     pub fn add_stock(&self, stock: &Stock) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO stocks (code, name, market, added_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO stocks (code, name, market, added_at, lot_size)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 stock.code,
                 stock.name,
                 stock.market.as_str(),
-                stock.added_at
+                stock.added_at,
+                stock.lot_size
             ],
         )?;
         Ok(())
@@ -110,7 +125,7 @@ impl Store {
     pub fn get_stock(&self, code: &str) -> Result<Option<Stock>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT code, name, market, added_at FROM stocks WHERE code = ?1")?;
+            .prepare("SELECT code, name, market, added_at, lot_size FROM stocks WHERE code = ?1")?;
         let mut rows = stmt.query(params![code])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row_to_stock(row)?))
@@ -122,7 +137,7 @@ impl Store {
     pub fn list_stocks(&self) -> Result<Vec<Stock>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT code, name, market, added_at FROM stocks ORDER BY code")?;
+            .prepare("SELECT code, name, market, added_at, lot_size FROM stocks ORDER BY code")?;
         let rows = stmt.query_map([], |row| Ok(row_to_stock(row)))?;
         let mut out = Vec::new();
         for r in rows {
@@ -369,6 +384,7 @@ fn row_to_stock(row: &rusqlite::Row) -> Result<Stock> {
         name: row.get(1)?,
         market,
         added_at: row.get(3)?,
+        lot_size: row.get(4)?,
     })
 }
 

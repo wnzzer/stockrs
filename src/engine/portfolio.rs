@@ -19,8 +19,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use rhai::{Array, Dynamic};
 
-use super::context::{Fees, TradeRec};
+use super::context::TradeRec;
 use super::metrics::{self, Metrics};
+use super::rules::{floor_to_lot, FeeModel};
 use crate::data::{fundamental, Fundamental, KLine};
 use crate::indicator;
 
@@ -31,6 +32,8 @@ pub struct StockData {
     pub name: String,
     pub klines: Vec<KLine>,
     pub funda: Vec<Fundamental>,
+    /// 每手股数(A股 100,港股逐股不同)。
+    pub lot: i64,
 }
 
 /// 组合内一笔成交记录。
@@ -80,6 +83,7 @@ struct Pos {
 struct Series {
     code: String,
     name: String,
+    lot: i64,
     opens: Vec<f64>,
     highs: Vec<f64>,
     lows: Vec<f64>,
@@ -108,7 +112,7 @@ pub struct PfInner {
     pending: Vec<Order>,
     trades: Vec<PfTrade>,
     equity: Vec<f64>,
-    fees: Fees,
+    fee: FeeModel,
     params: HashMap<String, f64>,
     /// 策略自定义状态(跨 bar 持久),供 ctx.set/get/has 读写。
     state: HashMap<String, f64>,
@@ -417,8 +421,8 @@ impl PfInner {
         if price <= 0.0 {
             return 0;
         }
-        let affordable = self.cash / (price * (1.0 + self.fees.buy_rate));
-        (affordable as i64 / 100) * 100
+        let affordable = self.cash / (price * (1.0 + self.fee.buy_rate_approx()));
+        floor_to_lot(affordable as i64, self.series[si].lot)
     }
 
     fn queue(&mut self, code: &str, buy: bool, shares: i64) {
@@ -449,7 +453,7 @@ impl PfInner {
             return;
         }
         let target_value = pct * self.total_value();
-        let target_shares = ((target_value / price) as i64 / 100) * 100;
+        let target_shares = floor_to_lot((target_value / price) as i64, self.series[si].lot);
         let cur = self.positions.get(&si).map(|p| p.shares).unwrap_or(0);
         let diff = target_shares - cur;
         if diff > 0 {
@@ -482,14 +486,14 @@ impl PfInner {
         let code = self.series[si].code.clone();
 
         if order.buy {
-            let unit_cost = price * (1.0 + self.fees.buy_rate);
-            let affordable = ((self.cash / unit_cost) as i64 / 100) * 100;
+            let unit_cost = price * (1.0 + self.fee.buy_rate_approx());
+            let affordable = floor_to_lot((self.cash / unit_cost) as i64, self.series[si].lot);
             let shares = order.shares.min(affordable);
             if shares <= 0 {
                 return;
             }
             let cost = shares as f64 * price;
-            let fee = cost * self.fees.buy_rate;
+            let fee = self.fee.buy_cost(cost);
             {
                 let pos = self.positions.entry(si).or_insert(Pos {
                     shares: 0,
@@ -516,7 +520,7 @@ impl PfInner {
                 return;
             }
             let proceeds = shares as f64 * price;
-            let fee = proceeds * (self.fees.sell_rate + self.fees.stamp_rate);
+            let fee = self.fee.sell_cost(proceeds);
             let avg_cost = self.positions.get(&si).map(|p| p.avg_cost).unwrap_or(0.0);
             let pnl_pct = if avg_cost > 0.0 {
                 Some((price - avg_cost) / avg_cost)
@@ -543,7 +547,12 @@ impl PfInner {
 }
 
 impl PortfolioCtx {
-    pub fn new(stocks: Vec<StockData>, capital: f64, params: HashMap<String, f64>) -> PortfolioCtx {
+    pub fn new(
+        stocks: Vec<StockData>,
+        capital: f64,
+        params: HashMap<String, f64>,
+        fee: FeeModel,
+    ) -> PortfolioCtx {
         let mut set: BTreeSet<String> = BTreeSet::new();
         for sd in &stocks {
             for k in &sd.klines {
@@ -577,6 +586,7 @@ impl PortfolioCtx {
             series.push(Series {
                 code: sd.code,
                 name: sd.name,
+                lot: sd.lot,
                 opens,
                 highs,
                 lows,
@@ -604,7 +614,7 @@ impl PortfolioCtx {
             pending: Vec::new(),
             trades: Vec::new(),
             equity: Vec::new(),
-            fees: Fees::default(),
+            fee,
             params,
             state: HashMap::new(),
         })))
@@ -864,6 +874,7 @@ mod tests {
             name: code.into(),
             klines: bars.iter().map(|(d, o, c)| k(d, *o, *c)).collect(),
             funda: Vec::new(),
+            lot: 100,
         }
     }
 
@@ -877,7 +888,7 @@ mod tests {
             "B",
             &[("d1", 20.0, 20.0), ("d2", 20.0, 20.0), ("d3", 20.0, 20.0)],
         );
-        let ctx = PortfolioCtx::new(vec![a, b], 100_000.0, HashMap::new());
+        let ctx = PortfolioCtx::new(vec![a, b], 100_000.0, HashMap::new(), FeeModel::a_share());
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {
@@ -908,7 +919,12 @@ mod tests {
         let a = stock("A", &[("d1", 10.0, 10.0), ("d2", 10.0, 12.0)]);
         let b = stock("B", &[("d1", 10.0, 10.0), ("d2", 10.0, 11.0)]);
         let c = stock("C", &[("d2", 5.0, 5.0)]);
-        let ctx = PortfolioCtx::new(vec![a, b, c], 100_000.0, HashMap::new());
+        let ctx = PortfolioCtx::new(
+            vec![a, b, c],
+            100_000.0,
+            HashMap::new(),
+            FeeModel::a_share(),
+        );
         let handle = ctx.clone();
         let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let sink2 = sink.clone();
@@ -932,7 +948,7 @@ mod tests {
             "A",
             &[("d1", 10.0, 10.0), ("d2", 10.0, 10.0), ("d3", 10.0, 10.0)],
         );
-        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new());
+        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::a_share());
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {
@@ -947,5 +963,28 @@ mod tests {
         let h = &res.holdings;
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].shares, 5000);
+    }
+
+    #[test]
+    fn hk_lot_size_rounds_to_board_lot() {
+        // 港股每手 500:目标 0.53*100000/10=5300 股,按 500 整手向下取整 -> 5000。
+        // 若仍写死每手 100,会得到 5300,故此测试能证明 lot 已下沉生效。
+        let mut a = stock(
+            "A",
+            &[("d1", 10.0, 10.0), ("d2", 10.0, 10.0), ("d3", 10.0, 10.0)],
+        );
+        a.lot = 500;
+        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::hk());
+        let c = ctx.clone();
+        let mut bar = 0;
+        let res = run(&ctx, move || {
+            if bar == 0 {
+                c.clone().order_target_pct_f("A".into(), 0.53);
+            }
+            bar += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(res.holdings[0].shares, 5000); // 按 500 整手,非 5300
     }
 }

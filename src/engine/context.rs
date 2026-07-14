@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use super::rules::{floor_to_lot, FeeModel};
 use crate::data::{fundamental, Fundamental, KLine};
 use crate::indicator;
 
@@ -19,23 +20,6 @@ pub struct Order {
     pub shares: i64,
 }
 
-pub struct Fees {
-    pub buy_rate: f64,
-    pub sell_rate: f64,
-    pub stamp_rate: f64,
-}
-
-impl Default for Fees {
-    fn default() -> Self {
-        // 买入万三，卖出万三 + 千一印花税
-        Fees {
-            buy_rate: 0.0003,
-            sell_rate: 0.0003,
-            stamp_rate: 0.001,
-        }
-    }
-}
-
 pub struct Inner {
     pub klines: Vec<KLine>,
     pub closes: Vec<f64>,
@@ -48,7 +32,9 @@ pub struct Inner {
     pub pending: Option<Order>,
     pub trades: Vec<TradeRec>,
     pub equity: Vec<f64>,
-    pub fees: Fees,
+    pub fee: FeeModel,
+    /// 每手股数(A股 100,港股逐股不同)。
+    pub lot: i64,
     /// 参数扫描注入的键值（供 ctx.param 读取）；普通回测为空。
     pub params: HashMap<String, f64>,
     /// 基本面按 bar 对齐后的序列(与 klines 等长,无数据处 NaN)。
@@ -67,8 +53,14 @@ pub struct Inner {
 pub struct Ctx(pub Arc<Mutex<Inner>>);
 
 impl Ctx {
-    pub fn new(klines: Vec<KLine>, capital: f64, funda: &[Fundamental]) -> Ctx {
-        Ctx::new_with_params(klines, capital, HashMap::new(), funda)
+    pub fn new(
+        klines: Vec<KLine>,
+        capital: f64,
+        funda: &[Fundamental],
+        lot: i64,
+        fee: FeeModel,
+    ) -> Ctx {
+        Ctx::new_with_params(klines, capital, HashMap::new(), funda, lot, fee)
     }
 
     pub fn new_with_params(
@@ -76,6 +68,8 @@ impl Ctx {
         capital: f64,
         params: HashMap<String, f64>,
         funda: &[Fundamental],
+        lot: i64,
+        fee: FeeModel,
     ) -> Ctx {
         let closes = klines.iter().map(|k| k.close).collect();
         let highs = klines.iter().map(|k| k.high).collect();
@@ -94,7 +88,8 @@ impl Ctx {
             pending: None,
             trades: Vec::new(),
             equity: Vec::new(),
-            fees: Fees::default(),
+            fee,
+            lot,
             params,
             pe: a.pe,
             pb: a.pb,
@@ -284,8 +279,8 @@ impl Ctx {
             if price <= 0.0 {
                 return 0;
             }
-            let affordable = s.cash / (price * (1.0 + s.fees.buy_rate));
-            (affordable as i64 / 100) * 100
+            let affordable = s.cash / (price * (1.0 + s.fee.buy_rate_approx()));
+            floor_to_lot(affordable as i64, s.lot)
         })
     }
 

@@ -1,6 +1,7 @@
 pub mod benchmark;
 pub mod eastmoney;
 pub mod fundamental;
+pub mod hk;
 pub mod models;
 pub mod sina;
 pub mod source;

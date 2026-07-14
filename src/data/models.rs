@@ -6,6 +6,8 @@ pub struct Stock {
     pub name: String,
     pub market: Market,
     pub added_at: String,
+    /// 每手股数(A股 100,港股逐股不同,由 F10 取得)。
+    pub lot_size: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

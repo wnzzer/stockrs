@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use super::context::{Ctx, Inner, Order, TradeRec};
 use super::metrics::{self, Metrics};
+use super::rules::floor_to_lot;
 
 pub struct BacktestResult {
     pub metrics: Metrics,
@@ -48,14 +49,14 @@ fn fill(s: &mut Inner, order: Order) {
     if order.buy {
         let mut shares = order.shares;
         // 现金不足时下调到可负担的整手数
-        let unit_cost = price * (1.0 + s.fees.buy_rate);
-        let affordable = ((s.cash / unit_cost) as i64 / 100) * 100;
+        let unit_cost = price * (1.0 + s.fee.buy_rate_approx());
+        let affordable = floor_to_lot((s.cash / unit_cost) as i64, s.lot);
         shares = shares.min(affordable);
         if shares <= 0 {
             return;
         }
         let cost = shares as f64 * price;
-        let fee = cost * s.fees.buy_rate;
+        let fee = s.fee.buy_cost(cost);
         let prev_cost = s.avg_cost * s.position as f64;
         s.position += shares;
         s.avg_cost = (prev_cost + cost) / s.position as f64;
@@ -73,7 +74,7 @@ fn fill(s: &mut Inner, order: Order) {
             return;
         }
         let proceeds = shares as f64 * price;
-        let fee = proceeds * (s.fees.sell_rate + s.fees.stamp_rate);
+        let fee = s.fee.sell_cost(proceeds);
         let pnl_pct = if s.avg_cost > 0.0 {
             Some((price - s.avg_cost) / s.avg_cost)
         } else {
@@ -120,7 +121,13 @@ mod tests {
             k("d2", 10.0, 10.0),
             k("d3", 12.0, 12.0),
         ];
-        let ctx = Ctx::new(klines, 100_000.0, &[]);
+        let ctx = Ctx::new(
+            klines,
+            100_000.0,
+            &[],
+            100,
+            crate::engine::rules::FeeModel::a_share(),
+        );
         let mut bar = 0;
         let c = ctx.clone();
         let res = run(&ctx, move || {

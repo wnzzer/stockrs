@@ -5,7 +5,7 @@ use clap::Subcommand;
 use comfy_table::Table;
 use tokio::sync::Semaphore;
 
-use crate::data::models::{normalize_code, Stock};
+use crate::data::models::{normalize_code, Market, Stock};
 use crate::data::source;
 use crate::data::Store;
 
@@ -51,17 +51,35 @@ async fn add(store: &mut Store, codes: Vec<String>) -> Result<()> {
         } else {
             name
         };
+        // 每手股数:港股逐股不同,拉 F10 TRADE_UNIT;A股恒 100。失败回退 100。
+        let lot_size = if market == Market::HK {
+            match crate::data::hk::fetch_lot_size(&code).await {
+                Ok(Some(l)) if l > 0 => l,
+                _ => {
+                    eprintln!("  {} 每手股数获取失败，暂按 100 股", code);
+                    100
+                }
+            }
+        } else {
+            100
+        };
         let stock = Stock {
             code: code.clone(),
             name,
             market,
             added_at: crate::utils::date::today(),
+            lot_size,
         };
         store.add_stock(&stock)?;
         let n = store.upsert_klines(&klines)?;
+        let lot_note = if market == Market::HK {
+            format!("，每手 {} 股", lot_size)
+        } else {
+            String::new()
+        };
         println!(
-            "已添加 {} {}，写入 {} 条日K（来源 {}）",
-            stock.code, stock.name, n, src
+            "已添加 {} {}，写入 {} 条日K（来源 {}）{}",
+            stock.code, stock.name, n, src, lot_note
         );
         // 基本面(全量)。失败仅告警,不影响已写入的 K 线。
         match crate::data::fundamental::fetch(&code, market, None).await {
