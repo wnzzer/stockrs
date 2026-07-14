@@ -56,6 +56,8 @@ pub struct Inner {
     pub pb: Vec<f64>,
     pub ps: Vec<f64>,
     pub mv: Vec<f64>,
+    /// 指标缓存:key(如 "sma:5")→ 全序列(NaN 代 None),避免每 bar 每次调用重算。
+    pub cache: HashMap<String, Vec<f64>>,
 }
 
 /// 传给 Rhai 策略的上下文句柄，内部共享可变状态。
@@ -96,6 +98,7 @@ impl Ctx {
             pb: a.pb,
             ps: a.ps,
             mv: a.mv,
+            cache: HashMap::new(),
         })))
     }
 
@@ -141,51 +144,124 @@ impl Ctx {
         })
     }
 
-    // ---- 技术指标（截至当前 bar）----
+    // ---- 技术指标（截至当前 bar，全序列缓存，避免每 bar 重算+分配）----
     pub fn sma(&mut self, period: i64) -> f64 {
         self.sma_at(period, 0)
     }
     pub fn sma_at(&mut self, period: i64, n: i64) -> f64 {
+        if period <= 0 {
+            return f64::NAN;
+        }
+        let p = period as usize;
         self.with(|s| {
-            let idx = s.i as i64 - n;
-            if idx < 0 || period <= 0 {
-                return f64::NAN;
-            }
-            opt(indicator::sma(&s.closes, period as usize)[idx as usize])
+            indi_at(s, n, format!("sma:{}", period), move |s| {
+                indicator::sma(&s.closes, p).into_iter().map(opt).collect()
+            })
         })
     }
     pub fn ema(&mut self, period: i64) -> f64 {
+        if period <= 0 {
+            return f64::NAN;
+        }
+        let p = period as usize;
         self.with(|s| {
-            if period <= 0 {
-                return f64::NAN;
-            }
-            opt(indicator::ema(&s.closes, period as usize)[s.i])
+            indi_at(s, 0, format!("ema:{}", period), move |s| {
+                indicator::ema(&s.closes, p).into_iter().map(opt).collect()
+            })
         })
     }
     pub fn rsi(&mut self, period: i64) -> f64 {
+        if period <= 0 {
+            return f64::NAN;
+        }
+        let p = period as usize;
         self.with(|s| {
-            if period <= 0 {
-                return f64::NAN;
-            }
-            opt(indicator::rsi(&s.closes, period as usize)[s.i])
+            indi_at(s, 0, format!("rsi:{}", period), move |s| {
+                indicator::rsi(&s.closes, p).into_iter().map(opt).collect()
+            })
         })
     }
     pub fn macd(&mut self, fast: i64, slow: i64, signal: i64) -> rhai::Array {
+        let (f, sl, sg) = (fast as usize, slow as usize, signal as usize);
+        let tag = format!("{}:{}:{}", fast, slow, signal);
         self.with(|s| {
-            let m = indicator::macd(&s.closes, fast as usize, slow as usize, signal as usize);
-            arr3(opt(m.dif[s.i]), opt(m.dea[s.i]), opt(m.macd[s.i]))
+            let dif = indi_at(s, 0, format!("macd.dif:{}", tag), move |s| {
+                indicator::macd(&s.closes, f, sl, sg)
+                    .dif
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            let dea = indi_at(s, 0, format!("macd.dea:{}", tag), move |s| {
+                indicator::macd(&s.closes, f, sl, sg)
+                    .dea
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            let mac = indi_at(s, 0, format!("macd.macd:{}", tag), move |s| {
+                indicator::macd(&s.closes, f, sl, sg)
+                    .macd
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            arr3(dif, dea, mac)
         })
     }
     pub fn kdj(&mut self, period: i64) -> rhai::Array {
+        let p = period as usize;
         self.with(|s| {
-            let k = indicator::kdj(&s.highs, &s.lows, &s.closes, period as usize);
-            arr3(opt(k.k[s.i]), opt(k.d[s.i]), opt(k.j[s.i]))
+            let k = indi_at(s, 0, format!("kdj.k:{}", period), move |s| {
+                indicator::kdj(&s.highs, &s.lows, &s.closes, p)
+                    .k
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            let d = indi_at(s, 0, format!("kdj.d:{}", period), move |s| {
+                indicator::kdj(&s.highs, &s.lows, &s.closes, p)
+                    .d
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            let j = indi_at(s, 0, format!("kdj.j:{}", period), move |s| {
+                indicator::kdj(&s.highs, &s.lows, &s.closes, p)
+                    .j
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            arr3(k, d, j)
         })
     }
     pub fn boll(&mut self, period: i64, mult: f64) -> rhai::Array {
+        let p = period as usize;
+        let tag = format!("{}:{}", period, mult);
         self.with(|s| {
-            let b = indicator::boll(&s.closes, period as usize, mult);
-            arr3(opt(b.upper[s.i]), opt(b.mid[s.i]), opt(b.lower[s.i]))
+            let up = indi_at(s, 0, format!("boll.u:{}", tag), move |s| {
+                indicator::boll(&s.closes, p, mult)
+                    .upper
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            let mid = indi_at(s, 0, format!("boll.m:{}", tag), move |s| {
+                indicator::boll(&s.closes, p, mult)
+                    .mid
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            let low = indi_at(s, 0, format!("boll.l:{}", tag), move |s| {
+                indicator::boll(&s.closes, p, mult)
+                    .lower
+                    .into_iter()
+                    .map(opt)
+                    .collect()
+            });
+            arr3(up, mid, low)
         })
     }
 
@@ -254,6 +330,24 @@ impl Ctx {
             }
         });
     }
+}
+
+/// 取指标 back 天前的值:首次计算整条并缓存,后续 O(1) 命中。越界/未算返回 NaN。
+fn indi_at(s: &mut Inner, back: i64, key: String, compute: impl FnOnce(&Inner) -> Vec<f64>) -> f64 {
+    let idx = s.i as i64 - back;
+    if idx < 0 {
+        return f64::NAN;
+    }
+    let uidx = idx as usize;
+    if !s.cache.contains_key(&key) {
+        let v = compute(&*s);
+        s.cache.insert(key.clone(), v);
+    }
+    s.cache
+        .get(&key)
+        .and_then(|v| v.get(uidx))
+        .copied()
+        .unwrap_or(f64::NAN)
 }
 
 fn opt(v: Option<f64>) -> f64 {
