@@ -7,6 +7,7 @@ use crate::engine::portfolio::PortfolioCtx;
 /// 构建注册了 ctx 方法的 Rhai 引擎。
 pub fn build_engine() -> Engine {
     let mut engine = Engine::new();
+    engine.set_max_expr_depths(128, 128);
     engine.register_type_with_name::<Ctx>("Ctx");
 
     // 行情字段（注册为属性 getter，脚本里可写 ctx.close）
@@ -49,6 +50,7 @@ pub fn build_engine() -> Engine {
 /// 且新增 stocks()/universe()/rank()/order_target_pct()。
 pub fn build_portfolio_engine() -> Engine {
     let mut engine = Engine::new();
+    engine.set_max_expr_depths(128, 128);
     engine.register_type_with_name::<PortfolioCtx>("PortfolioCtx");
 
     engine.register_get("date", PortfolioCtx::date);
