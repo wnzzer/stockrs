@@ -1,3 +1,4 @@
+pub mod benchmark;
 pub mod eastmoney;
 pub mod models;
 pub mod sina;

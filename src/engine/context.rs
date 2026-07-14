@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::data::KLine;
@@ -48,6 +49,8 @@ pub struct Inner {
     pub trades: Vec<TradeRec>,
     pub equity: Vec<f64>,
     pub fees: Fees,
+    /// 参数扫描注入的键值（供 ctx.param 读取）；普通回测为空。
+    pub params: HashMap<String, f64>,
 }
 
 /// 传给 Rhai 策略的上下文句柄，内部共享可变状态。
@@ -56,6 +59,10 @@ pub struct Ctx(pub Arc<Mutex<Inner>>);
 
 impl Ctx {
     pub fn new(klines: Vec<KLine>, capital: f64) -> Ctx {
+        Ctx::new_with_params(klines, capital, HashMap::new())
+    }
+
+    pub fn new_with_params(klines: Vec<KLine>, capital: f64, params: HashMap<String, f64>) -> Ctx {
         let closes = klines.iter().map(|k| k.close).collect();
         let highs = klines.iter().map(|k| k.high).collect();
         let lows = klines.iter().map(|k| k.low).collect();
@@ -72,7 +79,13 @@ impl Ctx {
             trades: Vec::new(),
             equity: Vec::new(),
             fees: Fees::default(),
+            params,
         })))
+    }
+
+    /// 回测结束后取资金曲线（供基准对齐）。
+    pub fn equity_curve(&self) -> Vec<f64> {
+        self.0.lock().unwrap().equity.clone()
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut Inner) -> T) -> T {
@@ -179,6 +192,21 @@ impl Ctx {
             let affordable = s.cash / (price * (1.0 + s.fees.buy_rate));
             (affordable as i64 / 100) * 100
         })
+    }
+
+    // ---- 参数注入（供参数扫描）----
+    // rhai 按实参类型选择重载：ctx.param("fast", 5) 命中 i64 版返回 i64；
+    // ctx.param("thresh", 30.0) 命中 f64 版返回 f64。缺省则回退到 default。
+    pub fn param_i(&mut self, name: String, default: i64) -> i64 {
+        self.with(|s| {
+            s.params
+                .get(&name)
+                .map(|v| v.round() as i64)
+                .unwrap_or(default)
+        })
+    }
+    pub fn param_f(&mut self, name: String, default: f64) -> f64 {
+        self.with(|s| s.params.get(&name).copied().unwrap_or(default))
     }
 
     // ---- 下单（次日开盘成交）----

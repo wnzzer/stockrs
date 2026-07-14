@@ -33,18 +33,34 @@ pub enum Commands {
         period: usize,
     },
 
-    /// 回测策略脚本
+    /// 回测策略脚本（单标的 / 多股票组合 / 参数扫描）
     Backtest {
         /// Rhai 策略脚本路径
         script: String,
+        /// 单标的回测代码
         #[arg(long)]
-        stock: String,
+        stock: Option<String>,
+        /// 组合回测股票列表（逗号分隔或多次指定），与 --stock 互斥
+        #[arg(long, value_delimiter = ',')]
+        stocks: Vec<String>,
+        /// 组合回测使用全部已跟踪股票
+        #[arg(long)]
+        universe: bool,
         #[arg(long)]
         start: Option<String>,
         #[arg(long)]
         end: Option<String>,
         #[arg(long, default_value_t = 100_000.0)]
         capital: f64,
+        /// 基准指数：hs300/zz500/sh/sz/cyb 等别名或指数代码
+        #[arg(long)]
+        benchmark: Option<String>,
+        /// 参数扫描：key=v1,v2,...（可重复指定多个参数做网格）
+        #[arg(long)]
+        param: Vec<String>,
+        /// 扫描排序键：return（默认）/annual/sharpe/drawdown
+        #[arg(long)]
+        optimize: Option<String>,
     },
 
     /// 持仓管理
@@ -68,10 +84,20 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Backtest {
             script,
             stock,
+            stocks,
+            universe,
             start,
             end,
             capital,
-        } => backtest::run(script, stock, start, end, capital),
+            benchmark,
+            param,
+            optimize,
+        } => {
+            backtest::run(
+                script, stock, stocks, universe, start, end, capital, benchmark, param, optimize,
+            )
+            .await
+        }
         Commands::Portfolio(cmd) => portfolio::run(cmd).await,
         Commands::SelfUpdate { check } => selfupdate::run(check).await,
     }

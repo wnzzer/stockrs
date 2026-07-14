@@ -58,7 +58,10 @@ stockrs portfolio history
 | `data list` / `data info <code>` | 查看列表 / 单只数据信息 |
 | `quote <code...>` | 实时行情 |
 | `indicator <code> [--period N]` | 最新技术指标 |
-| `backtest <script> --stock <code> [--start --end --capital]` | 回测 |
+| `backtest <script> --stock <code> [--start --end --capital]` | 单标的回测 |
+| `backtest <script> --stocks a,b,c` / `--universe` | 多股票组合回测 |
+| `backtest <script> ... --benchmark hs300` | 叠加基准对比（收益/超额/Alpha/Beta） |
+| `backtest <script> ... --param k=v1,v2 [--optimize sharpe]` | 参数扫描（网格寻优） |
 | `portfolio add/remove/list/history` | 持仓管理 |
 | `portfolio stats <code>` | 持仓收益分析（曲线/回撤/日均收益） |
 | `self-update [--check]` | 更新 stockrs 自身到最新版本 |
@@ -96,6 +99,58 @@ fn on_bar(ctx) {
 | 交易 | `ctx.buy(price, shares)` `ctx.sell(price, shares)` |
 
 `macd` / `kdj` / `boll` 返回长度为 3 的数组。指标数据不足时返回 `NaN`，脚本可用 `x != x` 判断。
+
+## 组合回测
+
+多股票组合回测中，`on_bar(ctx)` 每个**交易日**调用一次，一次能看到整个股票池，
+适合横截面选股与再平衡。行情/指标/交易方法都带一个 `code` 参数：
+
+```bash
+# 显式股票池
+stockrs backtest strategies/momentum_rotation.rhai --stocks 600519,000858,300750
+# 用全部已跟踪股票作为股票池
+stockrs backtest strategies/momentum_rotation.rhai --universe
+```
+
+组合 ctx API：
+
+| 分类 | 方法 |
+| --- | --- |
+| 选股 | `ctx.stocks()` 当日活跃代码 · `ctx.universe()` 全部 · `ctx.rank(lookback)` 按动量降序 |
+| 行情 | `ctx.close(code)` `ctx.open/high/low/volume(code)` `ctx.close_at(code, n)` |
+| 指标 | `ctx.sma(code, p)` `ctx.ema/rsi(code, p)` `ctx.macd(code,f,s,sig)` `ctx.kdj(code,p)` `ctx.boll(code,p,mult)` |
+| 账户 | `ctx.position(code)` `ctx.avg_cost(code)` `ctx.cash()` `ctx.total_value()` `ctx.max_shares(code)` |
+| 交易 | `ctx.buy(code, shares)` `ctx.sell(code, shares)` `ctx.order_target_pct(code, pct)` 再平衡到目标权重 |
+
+日期轴取股票池的**并集**，某股停牌当日按最近收盘估值；`rank` 只对当日活跃、
+数据充足的股票排序（数据不足者剔除）。同一交易日的订单**先卖后买**，卖出回笼现金可供买入。
+
+> 注意 rhai 区分整数与浮点：`order_target_pct` / `boll` 的浮点参数在脚本里要写小数
+> （`0.5`、`2.0`），周期类参数写整数。
+
+## 基准对比
+
+`--benchmark` 叠加同期指数买入持有对比，输出基准收益、超额收益、Beta、年化 Alpha。
+支持别名 `hs300`(沪深300) `zz500`(中证500) `sh`(上证) `sz`(深证) `cyb`(创业板) `kc50`(科创50)：
+
+```bash
+stockrs backtest strategies/sma_cross.rhai --stock 600519 --benchmark hs300
+```
+
+基准数据先读本地库，缺失则直连东财并缓存；取不到时告警跳过，不影响回测本身。
+
+## 参数扫描
+
+策略用 `ctx.param(name, default)` 读取可注入参数（`default` 用整数则返回整数、
+用小数则返回小数）。`--param key=v1,v2,...` 做网格（可多次指定，笛卡尔积，上限 200）：
+
+```bash
+stockrs backtest strategies/sma_cross_param.rhai --stock 600519 \
+  --param fast=5,10 --param slow=20,30,60 --optimize sharpe
+```
+
+按 `--optimize`（`return` 默认 / `annual` / `sharpe` / `drawdown`）排序，输出各组合的
+收益/年化/回撤/夏普/胜率表，`★` 标注最优行。组合回测同样支持扫描。
 
 ## 回测规则
 
