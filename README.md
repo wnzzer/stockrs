@@ -98,6 +98,7 @@ fn on_bar(ctx) {
 | 指标 | `ctx.sma(p)` `ctx.ema(p)` `ctx.rsi(p)` `ctx.macd(f,s,sig)` `ctx.kdj(p)` `ctx.boll(p,mult)` |
 | 账户 | `ctx.position()` `ctx.cash()` `ctx.total_value()` `ctx.max_shares()` |
 | 基本面 | `ctx.pe` `ctx.pb` `ctx.ps` `ctx.mktcap`（按 bar 对齐，无数据 NaN） |
+| 状态 | `ctx.set(key, v)` `ctx.get(key, default)` `ctx.has(key)`（跨 bar 持久，用于止盈止损等；Rhai 函数访问不了脚本全局变量） |
 | 交易 | `ctx.buy(price, shares)` `ctx.sell(price, shares)` |
 
 `macd` / `kdj` / `boll` 返回长度为 3 的数组。指标数据不足时返回 `NaN`，脚本可用 `x != x` 判断。
@@ -123,6 +124,7 @@ stockrs backtest strategies/momentum_rotation.rhai --universe
 | 指标 | `ctx.sma(code, p)` `ctx.ema/rsi(code, p)` `ctx.macd(code,f,s,sig)` `ctx.kdj(code,p)` `ctx.boll(code,p,mult)` |
 | 账户 | `ctx.position(code)` `ctx.avg_cost(code)` `ctx.cash()` `ctx.total_value()` `ctx.max_shares(code)` |
 | 基本面 | `ctx.pe(code)` `ctx.pb(code)` `ctx.ps(code)` `ctx.mktcap(code)` |
+| 状态 | `ctx.set(key, v)` `ctx.get(key, default)` `ctx.has(key)`（跨 bar 持久；组合可用 `"entry:"+code` 按股 key） |
 | 交易 | `ctx.buy(code, shares)` `ctx.sell(code, shares)` `ctx.order_target_pct(code, pct)` 再平衡到目标权重 |
 
 日期轴取股票池的**并集**，某股停牌当日按最近收盘估值；`rank` 只对当日活跃、

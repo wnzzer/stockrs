@@ -58,6 +58,8 @@ pub struct Inner {
     pub mv: Vec<f64>,
     /// 指标缓存:key(如 "sma:5")→ 全序列(NaN 代 None),避免每 bar 每次调用重算。
     pub cache: HashMap<String, Vec<f64>>,
+    /// 策略自定义状态(跨 bar 持久),供 ctx.set/get/has 读写,如记录建仓价做止盈止损。
+    pub state: HashMap<String, f64>,
 }
 
 /// 传给 Rhai 策略的上下文句柄，内部共享可变状态。
@@ -99,6 +101,7 @@ impl Ctx {
             ps: a.ps,
             mv: a.mv,
             cache: HashMap::new(),
+            state: HashMap::new(),
         })))
     }
 
@@ -313,6 +316,33 @@ impl Ctx {
     }
     pub fn mktcap(&mut self) -> f64 {
         self.with(|s| s.mv.get(s.i).copied().unwrap_or(f64::NAN))
+    }
+
+    // ---- 策略状态（跨 bar 持久，挂在 ctx 上；如记录建仓价做止盈止损）----
+    // set 按实参类型重载(整数存为 f64);get 按 default 类型选返回类型(整数四舍五入)。
+    pub fn set_f(&mut self, key: String, val: f64) {
+        self.with(|s| {
+            s.state.insert(key, val);
+        });
+    }
+    pub fn set_i(&mut self, key: String, val: i64) {
+        self.with(|s| {
+            s.state.insert(key, val as f64);
+        });
+    }
+    pub fn get_f(&mut self, key: String, default: f64) -> f64 {
+        self.with(|s| s.state.get(&key).copied().unwrap_or(default))
+    }
+    pub fn get_i(&mut self, key: String, default: i64) -> i64 {
+        self.with(|s| {
+            s.state
+                .get(&key)
+                .map(|v| v.round() as i64)
+                .unwrap_or(default)
+        })
+    }
+    pub fn has(&mut self, key: String) -> bool {
+        self.with(|s| s.state.contains_key(&key))
     }
 
     // ---- 下单（次日开盘成交）----

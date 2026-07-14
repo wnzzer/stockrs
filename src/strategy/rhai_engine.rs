@@ -48,6 +48,13 @@ pub fn build_engine() -> Engine {
     engine.register_fn("param", Ctx::param_i);
     engine.register_fn("param", Ctx::param_f);
 
+    // 策略状态(跨 bar 持久):ctx.set(key,v) / ctx.get(key,default) / ctx.has(key)
+    engine.register_fn("set", Ctx::set_i);
+    engine.register_fn("set", Ctx::set_f);
+    engine.register_fn("get", Ctx::get_i);
+    engine.register_fn("get", Ctx::get_f);
+    engine.register_fn("has", Ctx::has);
+
     engine
 }
 
@@ -97,6 +104,13 @@ pub fn build_portfolio_engine() -> Engine {
 
     engine.register_fn("param", PortfolioCtx::param_i);
     engine.register_fn("param", PortfolioCtx::param_f);
+
+    // 策略状态
+    engine.register_fn("set", PortfolioCtx::set_i);
+    engine.register_fn("set", PortfolioCtx::set_f);
+    engine.register_fn("get", PortfolioCtx::get_i);
+    engine.register_fn("get", PortfolioCtx::get_f);
+    engine.register_fn("has", PortfolioCtx::has);
 
     engine
 }

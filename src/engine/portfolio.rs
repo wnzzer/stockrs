@@ -110,6 +110,8 @@ pub struct PfInner {
     equity: Vec<f64>,
     fees: Fees,
     params: HashMap<String, f64>,
+    /// 策略自定义状态(跨 bar 持久),供 ctx.set/get/has 读写。
+    state: HashMap<String, f64>,
 }
 
 /// 传给 Rhai 组合策略的上下文句柄。
@@ -604,6 +606,7 @@ impl PortfolioCtx {
             equity: Vec::new(),
             fees: Fees::default(),
             params,
+            state: HashMap::new(),
         })))
     }
 
@@ -730,6 +733,32 @@ impl PortfolioCtx {
     }
     pub fn param_f(&mut self, name: String, default: f64) -> f64 {
         self.with(|s| s.params.get(&name).copied().unwrap_or(default))
+    }
+
+    // ---- 策略状态(跨 bar 持久;组合里可用 "entry:"+code 之类按股 key)----
+    pub fn set_f(&mut self, key: String, val: f64) {
+        self.with(|s| {
+            s.state.insert(key, val);
+        });
+    }
+    pub fn set_i(&mut self, key: String, val: i64) {
+        self.with(|s| {
+            s.state.insert(key, val as f64);
+        });
+    }
+    pub fn get_f(&mut self, key: String, default: f64) -> f64 {
+        self.with(|s| s.state.get(&key).copied().unwrap_or(default))
+    }
+    pub fn get_i(&mut self, key: String, default: i64) -> i64 {
+        self.with(|s| {
+            s.state
+                .get(&key)
+                .map(|v| v.round() as i64)
+                .unwrap_or(default)
+        })
+    }
+    pub fn has(&mut self, key: String) -> bool {
+        self.with(|s| s.state.contains_key(&key))
     }
 }
 
