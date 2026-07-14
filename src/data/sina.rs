@@ -42,6 +42,8 @@ fn parse_line(code: &str, inner: &str) -> Option<Quote> {
         volume: g(8) / 100.0, // 股 -> 手
         amount: g(9),
         turnover: None,
+        pe: None,
+        pb: None,
     })
 }
 

@@ -27,8 +27,14 @@ pub async fn run(codes: Vec<String>) -> Result<()> {
         "最高",
         "最低",
         "昨收",
+        "PE",
+        "PB",
         "来源",
     ]);
+    let fv = |o: Option<f64>| match o {
+        Some(x) => format!("{:.2}", x),
+        None => "--".to_string(),
+    };
     for (q, src) in quotes {
         table.add_row(vec![
             q.code,
@@ -40,6 +46,8 @@ pub async fn run(codes: Vec<String>) -> Result<()> {
             format!("{:.2}", q.high),
             format!("{:.2}", q.low),
             format!("{:.2}", q.prev_close),
+            fv(q.pe),
+            fv(q.pb),
             src.to_string(),
         ]);
     }

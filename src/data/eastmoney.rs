@@ -100,7 +100,8 @@ impl QuoteSource for Eastmoney {
                 ("secid", secid.as_str()),
                 (
                     "fields",
-                    "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f168,f169,f170",
+                    // f162=市盈率(动) f167=市净率(均按 100 缩放)
+                    "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f162,f167,f168,f169,f170",
                 ),
             ])
             .send()
@@ -136,6 +137,17 @@ impl QuoteSource for Eastmoney {
             volume: data.get("f47").and_then(Value::as_f64).unwrap_or(0.0),
             amount: data.get("f48").and_then(Value::as_f64).unwrap_or(0.0),
             turnover: data.get("f168").and_then(Value::as_f64).map(|v| v / 100.0),
+            // PE 可为负(亏损);0 视为无数据 → None
+            pe: data
+                .get("f162")
+                .and_then(Value::as_f64)
+                .map(|v| v / 100.0)
+                .filter(|v| *v != 0.0),
+            pb: data
+                .get("f167")
+                .and_then(Value::as_f64)
+                .map(|v| v / 100.0)
+                .filter(|v| *v != 0.0),
         })
     }
 
@@ -153,7 +165,11 @@ impl QuoteSource for Eastmoney {
             .get(ULIST_URL)
             .query(&[
                 // f1 = 价格小数位数（股票 2、基金常见 3），价格字段需按它缩放
-                ("fields", "f1,f2,f3,f4,f5,f6,f8,f12,f14,f15,f16,f17,f18"),
+                // f9=市盈率 f23=市净率(均按 100 缩放)
+                (
+                    "fields",
+                    "f1,f2,f3,f4,f5,f6,f8,f9,f12,f14,f15,f16,f17,f18,f23",
+                ),
                 ("secids", secids.as_str()),
             ])
             .send()
@@ -197,6 +213,16 @@ impl QuoteSource for Eastmoney {
                 volume: num("f5"),
                 amount: num("f6"),
                 turnover: d.get("f8").and_then(Value::as_f64).map(|v| v / 100.0),
+                pe: d
+                    .get("f9")
+                    .and_then(Value::as_f64)
+                    .map(|v| v / 100.0)
+                    .filter(|v| *v != 0.0),
+                pb: d
+                    .get("f23")
+                    .and_then(Value::as_f64)
+                    .map(|v| v / 100.0)
+                    .filter(|v| *v != 0.0),
             });
         }
         Ok(out)

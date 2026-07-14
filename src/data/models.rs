@@ -108,6 +108,9 @@ pub struct Quote {
     pub volume: f64,
     pub amount: f64,
     pub turnover: Option<f64>,
+    /// 市盈率(动/TTM)、市净率;仅东财源提供,其它源为 None。
+    pub pe: Option<f64>,
+    pub pb: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

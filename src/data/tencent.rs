@@ -50,6 +50,8 @@ fn parse_line(code: &str, inner: &str) -> Option<Quote> {
         volume: g(6),
         amount: if f.len() > 37 { g(37) * 10000.0 } else { 0.0 },
         turnover: f.get(38).and_then(|s| s.parse::<f64>().ok()),
+        pe: None,
+        pb: None,
     })
 }
 
