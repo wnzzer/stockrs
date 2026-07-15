@@ -47,35 +47,35 @@ stockrs/
 ├── .gitignore
 ├── src/
 │   ├── main.rs             # CLI 入口，clap 命令路由
+│   ├── cli.rs              # 命令枚举 + 路由（模块根，Rust 2018 风格，不用 mod.rs）
 │   ├── cli/
-│   │   ├── mod.rs
 │   │   ├── data.rs         # data 子命令
 │   │   ├── quote.rs        # quote 子命令
 │   │   ├── backtest.rs     # backtest 子命令
 │   │   ├── portfolio.rs    # portfolio 子命令
 │   │   └── indicator.rs    # indicator 子命令
+│   ├── data.rs             # 数据层模块根
 │   ├── data/
-│   │   ├── mod.rs
 │   │   ├── eastmoney.rs    # 东财 API 请求/解析
 │   │   ├── store.rs        # SQLite 存储层
 │   │   └── models.rs       # 数据模型（KLine, Stock 等）
+│   ├── engine.rs           # 回测引擎模块根
 │   ├── engine/
-│   │   ├── mod.rs
 │   │   ├── backtest.rs     # 回测引擎核心
 │   │   ├── context.rs      # 策略上下文（持仓、资金、订单）
 │   │   └── metrics.rs      # 绩效指标计算
+│   ├── indicator.rs        # 指标模块根
 │   ├── indicator/
-│   │   ├── mod.rs
 │   │   ├── ma.rs           # MA / EMA / SMA
 │   │   ├── rsi.rs          # RSI
 │   │   ├── macd.rs         # MACD
 │   │   ├── kdj.rs          # KDJ
 │   │   └── boll.rs         # 布林带
+│   ├── strategy.rs         # 策略模块根
 │   ├── strategy/
-│   │   ├── mod.rs
 │   │   └── rhai_engine.rs  # Rhai 脚本引擎，注册函数和绑定
+│   ├── utils.rs            # 工具模块根
 │   └── utils/
-│       ├── mod.rs
 │       └── format.rs       # 输出格式化
 └── strategies/              # 示例策略目录
     ├── sma_cross.rhai       # 均线交叉策略
