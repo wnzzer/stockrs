@@ -1,6 +1,6 @@
 [package]
 name = "stockrs"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 description = "轻量 A 股量化 CLI 工具"
 license = "MIT"
