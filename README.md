@@ -12,7 +12,7 @@
 - 💾 SQLite 单文件存储，零部署
 - 📈 内置技术指标：MA / EMA / RSI / MACD / KDJ / BOLL
 - 💹 基本面数据：历史日度 PE / PB / PS / 总市值，支持技术面 + 基本面双重验证回测
-- 🇭🇰 港股支持：行情 / 日K / 回测，逐股每手股数 + 港股费用模型 + 货币隔离
+- 🇭🇰 港股支持：行情 / 日K / 基本面(PE/PB) / 回测，逐股每手股数 + 港股费用模型 + 货币隔离
 - 🧪 Rhai 嵌入式脚本策略引擎，回测避免未来函数（次日开盘成交）
 - 💰 手续费/印花税建模，输出收益、回撤、夏普、胜率等绩效指标
 - 📁 持仓管理与实时盈亏
@@ -136,10 +136,12 @@ stockrs backtest strategies/momentum_rotation.rhai --universe
 
 ## 基本面数据（PE/PB）
 
-`data add` / `data update` 会一并拉取历史日度估值(东财 datacenter,PE-TTM / PB-MRQ / PS-TTM / 总市值,约 8 年),存入本地库并增量维护。
+`data add` / `data update` 会一并拉取历史日度估值,存入本地库并增量维护。A 股取自东财
+datacenter(PE-TTM / PB-MRQ / PS-TTM / 总市值,约 8 年);港股取自百度股市通(PE-TTM /
+PB / 总市值,近三年;港股无真市销率,`ps` 留空)。两者落进同一张表,下游对齐/回测逻辑完全一致。
 
 - **回测里按 bar 无未来函数对齐**:在第 t 根 K 线只能读到第 t 天(或之前最近一天)的估值(on-or-before carry-forward),不会用未来数据。无数据处为 `NaN`,亏损股 PE 为负。
-- 单标的策略用无参 `ctx.pe` / `ctx.pb` / `ctx.ps` / `ctx.mktcap`;组合策略用带 code 的 `ctx.pb(code)` 等。
+- 单标的策略用无参 `ctx.pe` / `ctx.pb` / `ctx.ps` / `ctx.mktcap`;组合策略用带 code 的 `ctx.pb(code)` 等。**A 股港股用法完全一致**。
 - `indicator` 命令会显示最新 PE/PB/PS/总市值。
 
 **双重验证示例**:技术面信号叠加基本面过滤——
@@ -147,6 +149,8 @@ stockrs backtest strategies/momentum_rotation.rhai --universe
 ```bash
 # 单标的:金叉且 PB 低于阈值才买
 stockrs backtest strategies/value_sma.rhai --stock 600519 --param pb_max=3,5,8 --optimize sharpe
+# 港股同样可用(同一套 ctx.pe/ctx.pb)
+stockrs backtest strategies/value_sma.rhai --stock hk00700 --param pb_max=3,5
 # 组合:在低 PB 股票池里按动量轮动
 stockrs backtest strategies/value_momentum.rhai --universe --param top_n=2,3 --param pb_max=3,5
 ```
@@ -191,8 +195,8 @@ stockrs backtest strategies/sma_cross.rhai --stock 00700 --start 2020-01-01
   - **每手股数逐股不同**(00700=100、汇丰 00005=400、工行 01398=1000…),`data add` 时从东财 F10 取 `TRADE_UNIT` 落库,撮合按各自每手整手。
   - **港股费用模型**:印花税 0.1%(**买卖双向**,与 A 股仅卖出不同)+ 交易费/证监会征费/财汇局征费/结算费,券商佣金可配。A 股规则完全不变(零回归)。
   - **货币隔离**:港股按 HKD、A 股按 CNY;**同一组合回测不能混用**(会报错提示分开跑),单一市场 universe 正常。
-- **基本面**:港股历史 PE/PB 只有报告期粒度(A 股是日频),暂未接入回测;`quote` 里有当前 PE 快照。
-- 当前报告货币符号统一显示 `¥`(数字为对应币种;港股符号显示为后续优化项)。
+- **基本面**:港股日频 PE/PB/总市值来自百度股市通(近三年),与 A 股同一套 PIT 对齐进回测,`ctx.pe` / `ctx.pb` / `ctx.mktcap` 港股一样可用(详见上文「基本面数据」章节);港股无真市销率,`ctx.ps` 留空。
+- **货币符号**:港股回测报告显示 `HK$`,A 股显示 `¥`,按标的市场自动切换。
 
 ## 回测规则
 
