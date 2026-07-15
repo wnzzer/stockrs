@@ -4,11 +4,17 @@ pub mod indicator;
 pub mod portfolio;
 pub mod quote;
 pub mod selfupdate;
+pub mod strategy;
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "stockrs", version, about = "轻量 A 股量化 CLI 工具")]
+#[command(
+    name = "stockrs",
+    version,
+    about = "轻量 A 股量化 CLI 工具",
+    after_help = "上手:\n  stockrs data add 600519          下载日K(港股用 hk00700)\n  stockrs strategy new my.rhai     新建策略模板(含完整 ctx API 注释)\n  stockrs backtest my.rhai --stock 600519\n\n各子命令用 `stockrs <命令> --help` 看细节。完整文档见 README:\nhttps://github.com/wnzzer/stockrs"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -28,12 +34,17 @@ pub enum Commands {
 
     /// 技术指标展示
     Indicator {
+        /// 股票/基金代码（港股用 hk00700 或 00700）
         code: String,
+        /// 指标周期（默认 20）
         #[arg(long, default_value_t = 20)]
         period: usize,
     },
 
     /// 回测策略脚本（单标的 / 多股票组合 / 参数扫描）
+    #[command(
+        after_help = "示例:\n  单标的    stockrs backtest strategies/sma_cross.rhai --stock 600519 --start 2023-01-01\n  港股      stockrs backtest strategies/sma_cross.rhai --stock hk00700\n  组合      stockrs backtest strategies/momentum_rotation.rhai --universe\n  基准对比  stockrs backtest strategies/sma_cross.rhai --stock 600519 --benchmark hs300\n  参数扫描  stockrs backtest strategies/sma_cross_param.rhai --stock 600519 --param fast=5,10 --optimize sharpe\n\n新建策略: stockrs strategy new my.rhai   (生成带完整 ctx API 注释的模板)"
+    )]
     Backtest {
         /// Rhai 策略脚本路径
         script: String,
@@ -67,6 +78,10 @@ pub enum Commands {
     #[command(subcommand)]
     Portfolio(portfolio::PortfolioCmd),
 
+    /// 策略脚手架（生成带 ctx API 注释的模板）
+    #[command(subcommand)]
+    Strategy(strategy::StrategyCmd),
+
     /// 更新 stockrs 自身到最新版本
     #[command(name = "self-update")]
     SelfUpdate {
@@ -99,6 +114,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             .await
         }
         Commands::Portfolio(cmd) => portfolio::run(cmd).await,
+        Commands::Strategy(cmd) => strategy::run(cmd),
         Commands::SelfUpdate { check } => selfupdate::run(check).await,
     }
 }

@@ -64,13 +64,20 @@ stockrs portfolio history
 | `backtest <script> --stocks a,b,c` / `--universe` | 多股票组合回测 |
 | `backtest <script> ... --benchmark hs300` | 叠加基准对比（收益/超额/Alpha/Beta） |
 | `backtest <script> ... --param k=v1,v2 [--optimize sharpe]` | 参数扫描（网格寻优） |
+| `strategy new <file>` | 生成带完整 ctx API 注释的策略模板（脚手架） |
 | `portfolio add/remove/list/history` | 持仓管理 |
 | `portfolio stats <code>` | 持仓收益分析（曲线/回撤/日均收益） |
 | `self-update [--check]` | 更新 stockrs 自身到最新版本 |
 
 ## 策略脚本
 
-策略是一个 `.rhai` 文件，定义 `on_bar(ctx)`，每根 K 线调用一次。
+策略是一个 `.rhai` 文件，定义 `on_bar(ctx)`，每根 K 线调用一次。最快上手是让工具生成模板——
+里面内联了完整 ctx API 注释和一个可直接跑的示例：
+
+```bash
+stockrs strategy new my.rhai
+stockrs backtest my.rhai --stock 600519 --start 2023-01-01
+```
 
 ```javascript
 let name = "SMA Cross";
