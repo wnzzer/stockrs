@@ -35,6 +35,18 @@ fn parse_line(code: &str, inner: &str, is_hk: bool) -> Option<Quote> {
     let price = g(3);
     let prev_close = g(4);
     let change = price - prev_close;
+    // 腾讯 A股扩展字段(实测反推):[39]=市盈率(TTM) [46]=市净率。0/缺失 → None,
+    // 负 PE(亏损)保留。港股这些位布局不同([46] 是名称文本),不取,交本地基本面兜底。
+    let val = |i: usize| {
+        f.get(i)
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| *v != 0.0)
+    };
+    let (pe, pb) = if is_hk {
+        (None, None)
+    } else {
+        (val(39), val(46))
+    };
     Some(Quote {
         code: code.to_string(),
         name: f[1].to_string(),
@@ -60,8 +72,8 @@ fn parse_line(code: &str, inner: &str, is_hk: bool) -> Option<Quote> {
             0.0
         },
         turnover: f.get(38).and_then(|s| s.parse::<f64>().ok()),
-        pe: None,
-        pb: None,
+        pe,
+        pb,
     })
 }
 

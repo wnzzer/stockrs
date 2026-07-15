@@ -301,6 +301,19 @@ impl Store {
         Ok(date)
     }
 
+    /// 最近一条基本面（ORDER BY date DESC）。用于 quote 在实时源缺 PE/PB 时本地兜底。
+    pub fn latest_fundamental(&self, code: &str) -> Result<Option<Fundamental>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT code, date, pe_ttm, pb_mrq, ps_ttm, total_mv
+             FROM fundamentals WHERE code = ?1 ORDER BY date DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![code], |row| Ok(row_to_fundamental(row)))?;
+        match rows.next() {
+            Some(r) => Ok(Some(r??)),
+            None => Ok(None),
+        }
+    }
+
     // ---- portfolio ----
 
     pub fn add_position(
