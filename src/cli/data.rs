@@ -169,7 +169,18 @@ async fn update(store: &mut Store, codes: Vec<String>) -> Result<()> {
                     stock.code, stock.name, n, src
                 );
             }
-            Err(e) => eprintln!("{} {} 更新失败：{}", stock.code, stock.name, e),
+            Err(e) => {
+                // 已有历史数据时,增量拉不到新数据(某些源对已是最新的区间返回空,
+                // 叠加另一源临时网络问题)属常见且无害,不当作失败告警。
+                if store.kline_count(&stock.code).unwrap_or(0) > 0 {
+                    println!(
+                        "{} {} 无新数据（已是最新或数据源暂不可用）",
+                        stock.code, stock.name
+                    );
+                } else {
+                    eprintln!("{} {} 更新失败：{}", stock.code, stock.name, e);
+                }
+            }
         }
         // 基本面失败不阻断 K 线结果。
         match funda {
