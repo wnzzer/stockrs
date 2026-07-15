@@ -27,6 +27,7 @@ pub enum Commands {
     Data(data::DataCmd),
 
     /// 实时行情查询
+    #[command(after_help = "PE/PB 依次取自 东财实时 → 腾讯实时(A股/港股) → 本地基本面;\n带 * 者来自本地基本面(截至最近收盘),实时源未提供。")]
     Quote {
         /// 一个或多个股票代码
         codes: Vec<String>,
