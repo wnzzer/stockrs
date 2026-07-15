@@ -90,6 +90,7 @@ async fn run_single(
     let lot = stock.as_ref().map(|s| s.lot_size).unwrap_or(100);
     let name = stock.map(|s| s.name).unwrap_or_else(|| code.clone());
     let fee = FeeModel::for_market(market);
+    let ccy = if market == Market::HK { "HK$" } else { "¥" };
     let klines = store.get_klines(&code, start.as_deref(), end.as_deref())?;
     if klines.len() < 2 {
         bail!("{} 本地数据不足，请先 data add / update", code);
@@ -125,6 +126,7 @@ async fn run_single(
             &period_end,
             &result,
             bench_stats.as_ref(),
+            ccy,
         );
     } else {
         let mut rows: Vec<(HashMap<String, f64>, Metrics)> = Vec::new();
@@ -201,6 +203,7 @@ async fn run_portfolio(
         bail!("港股(HKD)与 A股(CNY)不能在同一组合回测(货币不同),请分开跑");
     }
     let fee = FeeModel::for_market(if has_hk { Market::HK } else { Market::SH });
+    let ccy = if has_hk { "HK$" } else { "¥" };
     let strategy = Strategy::load_portfolio(script)?;
     let strat_name = strategy.name();
 
@@ -219,7 +222,7 @@ async fn run_portfolio(
         .await;
         let bench_stats =
             bench.map(|(n, c, be)| engine::compute_benchmark(n, c, &result.equity, &be));
-        print_portfolio_report(&strat_name, &result, bench_stats.as_ref());
+        print_portfolio_report(&strat_name, &result, bench_stats.as_ref(), ccy);
     } else {
         let (period_start, period_end) = period_of(&data);
         let mut rows: Vec<(HashMap<String, f64>, Metrics)> = Vec::new();
@@ -416,9 +419,9 @@ fn fmt_pct2(v: f64) -> String {
     }
 }
 
-fn print_metrics_rows(m: &Metrics) {
-    row("初始资金", format!("¥{}", money(m.initial)));
-    row("期末资产", format!("¥{}", money(m.final_value)));
+fn print_metrics_rows(m: &Metrics, ccy: &str) {
+    row("初始资金", format!("{}{}", ccy, money(m.initial)));
+    row("期末资产", format!("{}{}", ccy, money(m.final_value)));
     row("总收益", format!("{:+.2}%", m.total_return * 100.0));
     row("年化收益", format!("{:+.2}%", m.annual_return * 100.0));
     row("最大回撤", format!("{:.2}%", m.max_drawdown * 100.0));
@@ -443,6 +446,7 @@ fn print_benchmark_rows(b: &Benchmark) {
     row("年化Alpha", fmt_pct2(b.alpha_annual));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_single_report(
     strat: &str,
     code: &str,
@@ -451,6 +455,7 @@ fn print_single_report(
     end: &str,
     result: &engine::BacktestResult,
     bench: Option<&Benchmark>,
+    ccy: &str,
 ) {
     let line = "─".repeat(INNER);
     println!("┌{}┐", line);
@@ -458,18 +463,18 @@ fn print_single_report(
     hr();
     row("股票", format!("{} {}", code, name));
     row("区间", format!("{} ~ {}", start, end));
-    print_metrics_rows(&result.metrics);
+    print_metrics_rows(&result.metrics, ccy);
     if let Some(b) = bench {
         hr();
         print_benchmark_rows(b);
     }
     hr();
     print_line("交易明细：");
-    print_single_trades(&result.trades);
+    print_single_trades(&result.trades, ccy);
     println!("└{}┘", line);
 }
 
-fn print_single_trades(trades: &[TradeRec]) {
+fn print_single_trades(trades: &[TradeRec], ccy: &str) {
     let n = trades.len();
     for (i, t) in trades.iter().enumerate() {
         if i >= MAX_TRADES_SHOWN {
@@ -481,13 +486,18 @@ fn print_single_trades(trades: &[TradeRec]) {
             None => String::new(),
         };
         print_line(&format!(
-            "{}  {:<4} {} @ ¥{:.2}  {}",
-            t.date, t.action, t.shares, t.price, pnl
+            "{}  {:<4} {} @ {}{:.2}  {}",
+            t.date, t.action, t.shares, ccy, t.price, pnl
         ));
     }
 }
 
-fn print_portfolio_report(strat: &str, result: &PortfolioResult, bench: Option<&Benchmark>) {
+fn print_portfolio_report(
+    strat: &str,
+    result: &PortfolioResult,
+    bench: Option<&Benchmark>,
+    ccy: &str,
+) {
     let line = "─".repeat(INNER);
     let start = result.dates.first().cloned().unwrap_or_default();
     let end = result.dates.last().cloned().unwrap_or_default();
@@ -496,7 +506,7 @@ fn print_portfolio_report(strat: &str, result: &PortfolioResult, bench: Option<&
     hr();
     row("股票池", format!("{} 只", result.stock_count));
     row("区间", format!("{} ~ {}", start, end));
-    print_metrics_rows(&result.metrics);
+    print_metrics_rows(&result.metrics, ccy);
     if let Some(b) = bench {
         hr();
         print_benchmark_rows(b);
@@ -508,7 +518,7 @@ fn print_portfolio_report(strat: &str, result: &PortfolioResult, bench: Option<&
     }
     for h in &result.holdings {
         print_line(&format!(
-            "{} {}  {}股 @¥{:.2}  现¥{:.2} 市值¥{:.0}  {:+.2}%",
+            "{} {}  {}股 @{ccy}{:.2}  现{ccy}{:.2} 市值{ccy}{:.0}  {:+.2}%",
             h.code,
             h.name,
             h.shares,
@@ -520,11 +530,11 @@ fn print_portfolio_report(strat: &str, result: &PortfolioResult, bench: Option<&
     }
     hr();
     print_line(&format!("交易明细：共 {} 笔", result.trades.len()));
-    print_pf_trades(&result.trades);
+    print_pf_trades(&result.trades, ccy);
     println!("└{}┘", line);
 }
 
-fn print_pf_trades(trades: &[PfTrade]) {
+fn print_pf_trades(trades: &[PfTrade], ccy: &str) {
     let n = trades.len();
     for (i, t) in trades.iter().enumerate() {
         if i >= MAX_TRADES_SHOWN {
@@ -536,8 +546,8 @@ fn print_pf_trades(trades: &[PfTrade]) {
             None => String::new(),
         };
         print_line(&format!(
-            "{}  {:<4} {} {}股 @¥{:.2}  {}",
-            t.date, t.action, t.code, t.shares, t.price, pnl
+            "{}  {:<4} {} {}股 @{}{:.2}  {}",
+            t.date, t.action, t.code, t.shares, ccy, t.price, pnl
         ));
     }
 }
