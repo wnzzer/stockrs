@@ -37,9 +37,11 @@ stockrs data info 000858
 
 # 3. 实时行情
 stockrs quote 000858 600519
+stockrs quote sh000001 上证指数 hs300   # 指数:交易所前缀 / 中文名 / 别名
 
 # 4. 技术指标
 stockrs indicator 000858 --period 20
+stockrs indicator sh000001              # 指数指标(无需 data add,在线取数)
 
 # 5. 回测策略
 stockrs backtest strategies/sma_cross.rhai --stock 000858 --start 2023-01-01 --end 2025-01-01
@@ -68,6 +70,11 @@ stockrs portfolio history
 | `portfolio add/remove/list/history` | 持仓管理 |
 | `portfolio stats <code>` | 持仓收益分析（曲线/回撤/日均收益） |
 | `self-update [--check]` | 更新 stockrs 自身到最新版本 |
+
+> **指数代码说明**：指数与同码股票靠 6 位数字无法区分（`000001` 既是上证指数
+> `1.000001`、也是平安银行 `0.000001`）。`quote` / `indicator` 里裸 `000001` 一律按**股票**
+> 解析（＝平安银行）；要查指数请用**交易所前缀** `sh000001` / `sz399001`，或**别名/中文名**
+> `上证指数` `sh` `hs300` `zz500` `cyb` `kc50` 等。`indicator` 查指数会在线取数、无需先 `data add`。
 
 ## 策略脚本
 

@@ -27,15 +27,17 @@ pub enum Commands {
     Data(data::DataCmd),
 
     /// 实时行情查询
-    #[command(after_help = "PE/PB 依次取自 东财实时 → 腾讯实时(A股/港股) → 本地基本面;\n带 * 者来自本地基本面(截至最近收盘),实时源未提供。")]
+    #[command(
+        after_help = "PE/PB 依次取自 东财实时 → 腾讯实时(A股/港股) → 本地基本面;\n带 * 者来自本地基本面(截至最近收盘),实时源未提供。"
+    )]
     Quote {
-        /// 一个或多个股票代码
+        /// 一个或多个代码（指数用 sh000001/上证指数/hs300）
         codes: Vec<String>,
     },
 
     /// 技术指标展示
     Indicator {
-        /// 股票/基金代码（港股用 hk00700 或 00700）
+        /// 股票/基金/指数代码（港股 hk00700；指数 sh000001 或 上证指数）
         code: String,
         /// 指标周期（默认 20）
         #[arg(long, default_value_t = 20)]
@@ -96,7 +98,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Data(cmd) => data::run(cmd).await,
         Commands::Quote { codes } => quote::run(codes).await,
-        Commands::Indicator { code, period } => indicator::run(code, period),
+        Commands::Indicator { code, period } => indicator::run(code, period).await,
         Commands::Backtest {
             script,
             stock,

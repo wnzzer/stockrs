@@ -1,8 +1,7 @@
 use anyhow::{anyhow, Result};
 use comfy_table::Table;
 
-use crate::data::models::normalize_code;
-use crate::data::{source, Store};
+use crate::data::{resolve_input, source, Store};
 
 pub async fn run(codes: Vec<String>) -> Result<()> {
     if codes.is_empty() {
@@ -11,7 +10,7 @@ pub async fn run(codes: Vec<String>) -> Result<()> {
     let mut reqs = Vec::with_capacity(codes.len());
     for input in &codes {
         let (code, market) =
-            normalize_code(input).ok_or_else(|| anyhow!("无法识别的代码 {}", input))?;
+            resolve_input(input).ok_or_else(|| anyhow!("无法识别的代码 {}", input))?;
         reqs.push((code, market));
     }
 
