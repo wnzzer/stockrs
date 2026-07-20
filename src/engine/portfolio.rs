@@ -22,7 +22,7 @@ use rhai::{Array, Dynamic};
 use super::context::TradeRec;
 use super::metrics::{self, Metrics};
 use super::rules::{floor_to_lot, FeeModel};
-use crate::data::{fundamental, Fundamental, KLine};
+use crate::data::{fundamental, Fundamental, KLine, Period};
 use crate::indicator;
 
 /// 一只股票的行情输入。
@@ -114,6 +114,8 @@ pub struct PfInner {
     equity: Vec<f64>,
     fee: FeeModel,
     params: HashMap<String, f64>,
+    /// K线周期,决定年化因子。
+    period: Period,
     /// 策略自定义状态(跨 bar 持久),供 ctx.set/get/has 读写。
     state: HashMap<String, f64>,
 }
@@ -552,6 +554,7 @@ impl PortfolioCtx {
         capital: f64,
         params: HashMap<String, f64>,
         fee: FeeModel,
+        period: Period,
     ) -> PortfolioCtx {
         let mut set: BTreeSet<String> = BTreeSet::new();
         for sd in &stocks {
@@ -616,6 +619,7 @@ impl PortfolioCtx {
             equity: Vec::new(),
             fee,
             params,
+            period,
             state: HashMap::new(),
         })))
     }
@@ -816,7 +820,7 @@ where
             pnl_pct: t.pnl_pct,
         })
         .collect();
-    let metrics = metrics::compute(initial, &s.equity, &trs);
+    let metrics = metrics::compute(initial, &s.equity, &trs, s.period.bars_per_year());
 
     let mut holdings: Vec<Holding> = s
         .positions
@@ -888,7 +892,7 @@ mod tests {
             "B",
             &[("d1", 20.0, 20.0), ("d2", 20.0, 20.0), ("d3", 20.0, 20.0)],
         );
-        let ctx = PortfolioCtx::new(vec![a, b], 100_000.0, HashMap::new(), FeeModel::a_share());
+        let ctx = PortfolioCtx::new(vec![a, b], 100_000.0, HashMap::new(), FeeModel::a_share(), Period::Day);
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {
@@ -924,6 +928,7 @@ mod tests {
             100_000.0,
             HashMap::new(),
             FeeModel::a_share(),
+            Period::Day,
         );
         let handle = ctx.clone();
         let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
@@ -948,7 +953,7 @@ mod tests {
             "A",
             &[("d1", 10.0, 10.0), ("d2", 10.0, 10.0), ("d3", 10.0, 10.0)],
         );
-        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::a_share());
+        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::a_share(), Period::Day);
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {
@@ -974,7 +979,7 @@ mod tests {
             &[("d1", 10.0, 10.0), ("d2", 10.0, 10.0), ("d3", 10.0, 10.0)],
         );
         a.lot = 500;
-        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::hk());
+        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::hk(), Period::Day);
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {

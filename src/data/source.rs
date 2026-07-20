@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
-use super::models::{KLine, Market, Quote};
+use super::models::{KLine, Market, Period, Quote};
 use super::{eastmoney::Eastmoney, sina::Sina, tencent::Tencent};
 
 /// 带超时的共享 HTTP 客户端。超时是故障切换能生效的前提：
@@ -34,7 +34,8 @@ pub trait QuoteSource: Send + Sync {
     }
 }
 
-/// 日K线数据源。beg/end 为 "YYYYMMDD"，"0" 表示不限。
+/// K线数据源。beg/end 为 "YYYYMMDD"，"0" 表示不限。period 指定日线/分钟线。
+/// 某些源不支持分钟线时应对 intraday 周期返回 Err,由故障切换转下一个源。
 #[async_trait]
 pub trait KlineSource: Send + Sync {
     fn name(&self) -> &'static str;
@@ -42,6 +43,7 @@ pub trait KlineSource: Send + Sync {
         &self,
         code: &str,
         market: Market,
+        period: Period,
         beg: &str,
         end: &str,
     ) -> Result<(String, Vec<KLine>)>;
@@ -60,12 +62,13 @@ fn kline_sources() -> Vec<Box<dyn KlineSource>> {
 pub async fn fetch_klines(
     code: &str,
     market: Market,
+    period: Period,
     beg: &str,
     end: &str,
 ) -> Result<(String, Vec<KLine>, &'static str)> {
     let mut errs = Vec::new();
     for src in kline_sources() {
-        match src.klines(code, market, beg, end).await {
+        match src.klines(code, market, period, beg, end).await {
             Ok((name, ks)) if !ks.is_empty() => return Ok((name, ks, src.name())),
             Ok(_) => errs.push(format!("  [{}] 返回空数据", src.name())),
             Err(e) => errs.push(format!("  [{}] {}", src.name(), e)),
@@ -157,7 +160,7 @@ mod tests {
     #[ignore]
     async fn tencent_kline_live() {
         let (_, ks) = Tencent
-            .klines("600519", Market::SH, "20240101", "20240201")
+            .klines("600519", Market::SH, Period::Day, "20240101", "20240201")
             .await
             .unwrap();
         assert!(!ks.is_empty());
@@ -167,7 +170,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn sina_kline_live() {
-        let (_, ks) = Sina.klines("600519", Market::SH, "0", "0").await.unwrap();
+        let (_, ks) = Sina
+            .klines("600519", Market::SH, Period::Day, "0", "0")
+            .await
+            .unwrap();
         assert!(!ks.is_empty());
     }
 }

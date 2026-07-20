@@ -10,5 +10,5 @@ pub mod tencent;
 
 pub use benchmark::resolve_input;
 #[allow(unused_imports)]
-pub use models::{Fundamental, KLine, Market, Position, Quote, Stock, Trade};
+pub use models::{Fundamental, KLine, Market, Period, Position, Quote, Stock, Trade};
 pub use store::Store;

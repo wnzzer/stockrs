@@ -164,7 +164,7 @@ fn stats(store: &Store, code: &str) -> Result<()> {
     let buy_date = positions.iter().map(|p| p.date.clone()).min().unwrap();
 
     let name = store.get_stock(code)?.map(|s| s.name).unwrap_or_default();
-    let klines = store.get_klines(code, Some(&buy_date), None)?;
+    let klines = store.get_klines(code, crate::data::Period::Day, Some(&buy_date), None)?;
     if klines.is_empty() {
         return Err(anyhow!(
             "{} 建仓日 {} 起无本地日K，请先 data add / update {}",

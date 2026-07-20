@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::models::{KLine, Market, Quote};
+use super::models::{KLine, Market, Period, Quote};
 use super::source::{http_client, KlineSource, QuoteSource};
 
 pub struct Sina;
@@ -111,11 +111,13 @@ impl KlineSource for Sina {
         "sina"
     }
 
-    /// 新浪日K（非前复权），仅返回最近约 1023 条，本地按区间过滤。
+    /// 新浪K线（非前复权），仅返回最近约 1023 条，本地按区间过滤。
+    /// 分钟线同一接口换 scale;date 字段变为 "YYYY-MM-DD HH:MM:SS",过滤取日期前缀。
     async fn klines(
         &self,
         code: &str,
         market: Market,
+        period: Period,
         beg: &str,
         end: &str,
     ) -> Result<(String, Vec<KLine>)> {
@@ -126,7 +128,7 @@ impl KlineSource for Sina {
             .get(url)
             .query(&[
                 ("symbol", sym.as_str()),
-                ("scale", "240"),
+                ("scale", period.sina_scale()),
                 ("ma", "no"),
                 ("datalen", "1023"),
             ])
@@ -149,10 +151,12 @@ impl KlineSource for Sina {
             if day.is_empty() {
                 continue;
             }
-            if !beg_d.is_empty() && day < beg_d.as_str() {
+            // 分钟线 day 形如 "2025-01-15 14:00:00",区间过滤只比日期前缀。
+            let day_date = &day[..day.len().min(10)];
+            if !beg_d.is_empty() && day_date < beg_d.as_str() {
                 continue;
             }
-            if !end_d.is_empty() && day > end_d.as_str() {
+            if !end_d.is_empty() && day_date > end_d.as_str() {
                 continue;
             }
             let n = |k: &str| {

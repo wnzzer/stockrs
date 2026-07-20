@@ -6,11 +6,11 @@ use crate::indicator;
 pub async fn run(code: String, period: usize) -> Result<()> {
     let (code, market) = resolve_input(&code).ok_or_else(|| anyhow!("无法识别的代码 {}", code))?;
     let store = Store::open_default()?;
-    let mut klines = store.get_klines(&code, None, None)?;
+    let mut klines = store.get_klines(&code, crate::data::Period::Day, None, None)?;
     if klines.is_empty() {
         // 指数从不 data add(且与同码股票在 klines 表按 code 冲突),普通股也可能未跟踪:
         // 直连行情源在线取数,仅用于本次计算,不落库(避免与同码标的互相覆盖)。
-        let (_, ks, _) = source::fetch_klines(&code, market, "0", "0")
+        let (_, ks, _) = source::fetch_klines(&code, market, crate::data::Period::Day, "0", "0")
             .await
             .map_err(|e| anyhow!("{} 无本地数据,在线获取也失败:{}", code, e))?;
         klines = ks;

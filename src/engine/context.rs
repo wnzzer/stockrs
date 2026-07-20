@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::rules::{floor_to_lot, FeeModel};
-use crate::data::{fundamental, Fundamental, KLine};
+use crate::data::{fundamental, Fundamental, KLine, Period};
 use crate::indicator;
 
 /// 一笔成交记录（回测内部）。
@@ -25,6 +25,7 @@ pub struct Inner {
     pub closes: Vec<f64>,
     pub highs: Vec<f64>,
     pub lows: Vec<f64>,
+    pub volumes: Vec<f64>,
     pub i: usize,
     pub cash: f64,
     pub position: i64,
@@ -35,6 +36,8 @@ pub struct Inner {
     pub fee: FeeModel,
     /// 每手股数(A股 100,港股逐股不同)。
     pub lot: i64,
+    /// K线周期,决定年化因子(bars_per_year)。
+    pub period: Period,
     /// 参数扫描注入的键值（供 ctx.param 读取）；普通回测为空。
     pub params: HashMap<String, f64>,
     /// 基本面按 bar 对齐后的序列(与 klines 等长,无数据处 NaN)。
@@ -59,10 +62,12 @@ impl Ctx {
         funda: &[Fundamental],
         lot: i64,
         fee: FeeModel,
+        period: Period,
     ) -> Ctx {
-        Ctx::new_with_params(klines, capital, HashMap::new(), funda, lot, fee)
+        Ctx::new_with_params(klines, capital, HashMap::new(), funda, lot, fee, period)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_params(
         klines: Vec<KLine>,
         capital: f64,
@@ -70,10 +75,12 @@ impl Ctx {
         funda: &[Fundamental],
         lot: i64,
         fee: FeeModel,
+        period: Period,
     ) -> Ctx {
         let closes = klines.iter().map(|k| k.close).collect();
         let highs = klines.iter().map(|k| k.high).collect();
         let lows = klines.iter().map(|k| k.low).collect();
+        let volumes = klines.iter().map(|k| k.volume).collect();
         let dates: Vec<String> = klines.iter().map(|k| k.date.clone()).collect();
         let a = fundamental::align(&dates, funda);
         Ctx(Arc::new(Mutex::new(Inner {
@@ -81,6 +88,7 @@ impl Ctx {
             closes,
             highs,
             lows,
+            volumes,
             i: 0,
             cash: capital,
             position: 0,
@@ -90,6 +98,7 @@ impl Ctx {
             equity: Vec::new(),
             fee,
             lot,
+            period,
             params,
             pe: a.pe,
             pb: a.pb,
@@ -140,6 +149,41 @@ impl Ctx {
                 s.closes[idx as usize]
             }
         })
+    }
+
+    pub fn volume_at(&mut self, n: i64) -> f64 {
+        self.with(|s| {
+            let idx = s.i as i64 - n;
+            if idx < 0 {
+                f64::NAN
+            } else {
+                s.volumes[idx as usize]
+            }
+        })
+    }
+
+    /// 成交量均线：过去 period 日成交量的简单均值（含当前 bar）。
+    pub fn vma(&mut self, period: i64) -> f64 {
+        if period <= 0 {
+            return f64::NAN;
+        }
+        let p = period as usize;
+        self.with(|s| {
+            indi_at(s, 0, format!("vma:{}", period), move |s| {
+                indicator::sma(&s.volumes, p).into_iter().map(opt).collect()
+            })
+        })
+    }
+
+    /// 量比：当前 bar 成交量 / 过去 period 日均量（vma）。>1 放量，<1 缩量。
+    pub fn volume_ratio(&mut self, period: i64) -> f64 {
+        let v = self.volume();
+        let avg = self.vma(period);
+        if avg.is_nan() || avg <= 0.0 {
+            f64::NAN
+        } else {
+            v / avg
+        }
     }
 
     // ---- 技术指标（截至当前 bar，全序列缓存，避免每 bar 重算+分配）----
@@ -385,4 +429,58 @@ fn arr3(a: f64, b: f64, c: f64) -> rhai::Array {
         rhai::Dynamic::from_float(b),
         rhai::Dynamic::from_float(c),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::rules::FeeModel;
+
+    fn kv(date: &str, close: f64, volume: f64) -> KLine {
+        KLine {
+            code: "T".into(),
+            date: date.into(),
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume,
+            amount: 0.0,
+            turnover: None,
+        }
+    }
+
+    fn ctx_at(i: usize) -> Ctx {
+        let ks = vec![
+            kv("d1", 10.0, 10.0),
+            kv("d2", 11.0, 20.0),
+            kv("d3", 12.0, 30.0),
+            kv("d4", 13.0, 40.0),
+        ];
+        let ctx = Ctx::new(ks, 100_000.0, &[], 100, FeeModel::a_share(), Period::Day);
+        ctx.0.lock().unwrap().i = i;
+        ctx
+    }
+
+    #[test]
+    fn volume_accessors() {
+        let mut c = ctx_at(3);
+        assert_eq!(c.volume(), 40.0);
+        assert_eq!(c.volume_at(0), 40.0);
+        assert_eq!(c.volume_at(1), 30.0);
+        // 越界返回 NaN
+        assert!(c.volume_at(10).is_nan());
+        // vma(2) = (30+40)/2 = 35
+        assert_eq!(c.vma(2), 35.0);
+        // 量比 = 40 / 35
+        assert!((c.volume_ratio(2) - 40.0 / 35.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vma_insufficient_window_is_nan() {
+        // i=0 时 2 周期均量数据不足
+        let mut c = ctx_at(0);
+        assert!(c.vma(2).is_nan());
+        assert!(c.volume_ratio(2).is_nan());
+    }
 }

@@ -8,6 +8,12 @@ pub mod strategy;
 
 use clap::{Parser, Subcommand};
 
+/// clap 值解析：CLI 周期字符串 -> Period（d/1m/5m/15m/30m/60m）。
+fn parse_period(s: &str) -> Result<crate::data::Period, String> {
+    crate::data::Period::parse(s)
+        .ok_or_else(|| format!("未知周期 {}（可用 d/1m/5m/15m/30m/60m）", s))
+}
+
 #[derive(Parser)]
 #[command(
     name = "stockrs",
@@ -75,6 +81,9 @@ pub enum Commands {
         /// 扫描排序键：return（默认）/annual/sharpe/drawdown
         #[arg(long)]
         optimize: Option<String>,
+        /// K线周期：d(默认)/1m/5m/15m/30m/60m（分钟线需先 data update --period 同周期）
+        #[arg(long, default_value = "d", value_parser = parse_period)]
+        period: crate::data::Period,
     },
 
     /// 持仓管理
@@ -110,9 +119,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             benchmark,
             param,
             optimize,
+            period,
         } => {
             backtest::run(
                 script, stock, stocks, universe, start, end, capital, benchmark, param, optimize,
+                period,
             )
             .await
         }

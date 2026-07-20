@@ -3,7 +3,7 @@
 //! market 后直连东财 kline 接口。取数失败时返回 None,由调用方降级(跳过基准对比)。
 
 use super::eastmoney::Eastmoney;
-use super::models::{normalize_code, KLine, Market};
+use super::models::{normalize_code, KLine, Market, Period};
 use super::source::KlineSource;
 use super::Store;
 
@@ -68,7 +68,7 @@ pub async fn fetch(
 ) -> Option<(String, String, Vec<KLine>)> {
     let (code, name, market) = resolve(input)?;
 
-    if let Ok(ks) = store.get_klines(code, start, end) {
+    if let Ok(ks) = store.get_klines(code, Period::Day, start, end) {
         if ks.len() >= 2 {
             return Some((code.to_string(), name.to_string(), ks));
         }
@@ -80,10 +80,10 @@ pub async fn fetch(
     let e = end
         .map(|s| s.replace('-', ""))
         .unwrap_or_else(|| "20500101".into());
-    match Eastmoney.klines(code, market, &beg, &e).await {
+    match Eastmoney.klines(code, market, Period::Day, &beg, &e).await {
         Ok((_, ks)) if !ks.is_empty() => {
-            let _ = store.upsert_klines(&ks);
-            let filtered = store.get_klines(code, start, end).unwrap_or(ks);
+            let _ = store.upsert_klines(&ks, Period::Day);
+            let filtered = store.get_klines(code, Period::Day, start, end).unwrap_or(ks);
             Some((code.to_string(), name.to_string(), filtered))
         }
         _ => None,

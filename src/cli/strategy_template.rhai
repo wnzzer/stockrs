@@ -8,12 +8,17 @@
 //    stockrs backtest 本文件 --stock 600519 --start 2023-01-01 --end 2025-01-01
 //    stockrs backtest 本文件 --stock hk00700                       # 港股同样适用
 //    stockrs backtest 本文件 --stock 600519 --param fast=5,10 --optimize sharpe
+//    stockrs backtest 本文件 --stock 600519 --period 5m           # 5分钟线回测
+//        (分钟线回测前需先 stockrs data update --period 5m 600519 拉同周期数据)
 // ===========================================================================
 //
 //  ctx API 速查(单标的):
 //
 //    行情(属性)    ctx.open  ctx.high  ctx.low  ctx.close  ctx.volume  ctx.date
 //    历史          ctx.close_at(n)                   n 天前收盘价
+//                  ctx.volume_at(n)                  n 天前成交量
+//    量能          ctx.vma(p)                        p 日成交量均线
+//                  ctx.volume_ratio(p)               量比 = 当前量 / p 日均量,>1 放量
 //    指标          ctx.sma(p)   ctx.ema(p)   ctx.rsi(p)
 //                  ctx.sma_at(p, n)                  n 天前的 SMA
 //                  ctx.macd(fast, slow, signal)      返回 [dif, dea, macd]

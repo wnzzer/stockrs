@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::models::{KLine, Market, Quote};
+use super::models::{KLine, Market, Period, Quote};
 use super::source::{http_client, KlineSource, QuoteSource};
 
 pub struct Tencent;
@@ -139,14 +139,19 @@ impl KlineSource for Tencent {
         "tencent"
     }
 
-    /// 腾讯前复权日K，支持区间但单次上限约 640 条。
+    /// 腾讯前复权日K，支持区间但单次上限约 640 条。分钟线接口(mkline)结构不同,
+    /// 本源只提供日线;分钟线交由故障切换的东财/新浪。
     async fn klines(
         &self,
         code: &str,
         market: Market,
+        period: Period,
         beg: &str,
         end: &str,
     ) -> Result<(String, Vec<KLine>)> {
+        if period.is_intraday() {
+            return Err(anyhow!("腾讯源暂不支持分钟线({})", period.label()));
+        }
         let sym = format!("{}{}", prefix(market), code);
         let param = format!("{},day,{},{},640,qfq", sym, dash_date(beg), dash_date(end));
         let url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get";

@@ -31,6 +31,7 @@ pub async fn run(
     benchmark: Option<String>,
     param: Vec<String>,
     optimize: Option<String>,
+    period: crate::data::Period,
 ) -> Result<()> {
     let mut store = Store::open_default()?;
     let grid = parse_param_grid(&param)?;
@@ -59,6 +60,7 @@ pub async fn run(
         }
         run_portfolio(
             &mut store, &script, codes, start, end, capital, benchmark, &grid, combos, optimize,
+            period,
         )
         .await
     } else {
@@ -67,6 +69,7 @@ pub async fn run(
         })?;
         run_single(
             &mut store, &script, code, start, end, capital, benchmark, &grid, combos, optimize,
+            period,
         )
         .await
     }
@@ -84,6 +87,7 @@ async fn run_single(
     grid: &[(String, Vec<f64>)],
     combos: Vec<HashMap<String, f64>>,
     optimize: Option<String>,
+    period: crate::data::Period,
 ) -> Result<()> {
     let (code, market) = normalize_code(&code).ok_or_else(|| anyhow!("无法识别的代码 {}", code))?;
     let stock = store.get_stock(&code)?;
@@ -91,9 +95,18 @@ async fn run_single(
     let name = stock.map(|s| s.name).unwrap_or_else(|| code.clone());
     let fee = FeeModel::for_market(market);
     let ccy = if market == Market::HK { "HK$" } else { "¥" };
-    let klines = store.get_klines(&code, start.as_deref(), end.as_deref())?;
+    let klines = store.get_klines(&code, period, start.as_deref(), end.as_deref())?;
     if klines.len() < 2 {
-        bail!("{} 本地数据不足，请先 data add / update", code);
+        bail!(
+            "{} 本地{}数据不足，请先 data add / update{}",
+            code,
+            period.label(),
+            if period.is_intraday() {
+                format!(" --period {}", period.tag())
+            } else {
+                String::new()
+            }
+        );
     }
     // 基本面(缺失则全 NaN,不影响回测);参数扫描各 combo 复用同一份。
     let funda = store.get_fundamentals(&code, start.as_deref(), end.as_deref())?;
@@ -104,7 +117,7 @@ async fn run_single(
     let strat_name = strategy.name();
 
     if grid.is_empty() {
-        let ctx = Ctx::new(klines, capital, &funda, lot, fee.clone());
+        let ctx = Ctx::new(klines, capital, &funda, lot, fee.clone(), period);
         let result = run_single_ctx(&ctx, &strategy)?;
         let strat_equity = ctx.equity_curve();
         let bench = fetch_bench_equity(
@@ -116,8 +129,9 @@ async fn run_single(
             end.as_deref(),
         )
         .await;
-        let bench_stats =
-            bench.map(|(n, c, be)| engine::compute_benchmark(n, c, &strat_equity, &be));
+        let bench_stats = bench.map(|(n, c, be)| {
+            engine::compute_benchmark(n, c, &strat_equity, &be, period.bars_per_year())
+        });
         print_single_report(
             &strat_name,
             &code,
@@ -138,6 +152,7 @@ async fn run_single(
                 &funda,
                 lot,
                 fee.clone(),
+                period,
             );
             let result = run_single_ctx(&ctx, &strategy)?;
             rows.push((combo, result.metrics));
@@ -167,6 +182,7 @@ async fn run_portfolio(
     grid: &[(String, Vec<f64>)],
     combos: Vec<HashMap<String, f64>>,
     optimize: Option<String>,
+    period: crate::data::Period,
 ) -> Result<()> {
     let mut data: Vec<StockData> = Vec::new();
     let mut markets: Vec<Market> = Vec::new();
@@ -178,9 +194,9 @@ async fn run_portfolio(
         let stock = store.get_stock(&code)?;
         let lot = stock.as_ref().map(|s| s.lot_size).unwrap_or(100);
         let name = stock.map(|s| s.name).unwrap_or_else(|| code.clone());
-        let ks = store.get_klines(&code, start.as_deref(), end.as_deref())?;
+        let ks = store.get_klines(&code, period, start.as_deref(), end.as_deref())?;
         if ks.len() < 2 {
-            eprintln!("跳过 {}：本地数据不足", code);
+            eprintln!("跳过 {}：本地{}数据不足", code, period.label());
             continue;
         }
         let funda = store.get_fundamentals(&code, start.as_deref(), end.as_deref())?;
@@ -208,7 +224,7 @@ async fn run_portfolio(
     let strat_name = strategy.name();
 
     if grid.is_empty() {
-        let ctx = PortfolioCtx::new(data, capital, HashMap::new(), fee.clone());
+        let ctx = PortfolioCtx::new(data, capital, HashMap::new(), fee.clone(), period);
         let dates = ctx.dates();
         let result = run_portfolio_ctx(&ctx, &strategy)?;
         let bench = fetch_bench_equity(
@@ -220,14 +236,15 @@ async fn run_portfolio(
             end.as_deref(),
         )
         .await;
-        let bench_stats =
-            bench.map(|(n, c, be)| engine::compute_benchmark(n, c, &result.equity, &be));
+        let bench_stats = bench.map(|(n, c, be)| {
+            engine::compute_benchmark(n, c, &result.equity, &be, period.bars_per_year())
+        });
         print_portfolio_report(&strat_name, &result, bench_stats.as_ref(), ccy);
     } else {
         let (period_start, period_end) = period_of(&data);
         let mut rows: Vec<(HashMap<String, f64>, Metrics)> = Vec::new();
         for combo in combos {
-            let ctx = PortfolioCtx::new(data.clone(), capital, combo.clone(), fee.clone());
+            let ctx = PortfolioCtx::new(data.clone(), capital, combo.clone(), fee.clone(), period);
             let result = run_portfolio_ctx(&ctx, &strategy)?;
             rows.push((combo, result.metrics));
         }

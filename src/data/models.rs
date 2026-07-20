@@ -97,6 +97,102 @@ pub fn secu_code(code: &str, market: Market) -> String {
     format!("{}.{}", code, market.as_str())
 }
 
+/// K线周期。日线与分钟线共用同一套存储/回测管线,差异由本枚举收口:
+/// 各数据源的接口参数、DB 主键分区、年化因子都从这里取,不散落魔法值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Period {
+    #[default]
+    Day,
+    Min1,
+    Min5,
+    Min15,
+    Min30,
+    Min60,
+}
+
+impl Period {
+    /// 解析 CLI 输入。接受 d/1m/5m/15m/30m/60m 及常见别名。
+    pub fn parse(s: &str) -> Option<Period> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "d" | "day" | "1d" | "daily" | "day1" => Some(Period::Day),
+            "1m" | "1" | "m1" | "min1" => Some(Period::Min1),
+            "5m" | "5" | "m5" | "min5" => Some(Period::Min5),
+            "15m" | "15" | "m15" | "min15" => Some(Period::Min15),
+            "30m" | "30" | "m30" | "min30" => Some(Period::Min30),
+            "60m" | "60" | "m60" | "min60" | "1h" | "h1" => Some(Period::Min60),
+            _ => None,
+        }
+    }
+
+    /// DB 存储标签,也是 klines 主键的分区维度。
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Period::Day => "d",
+            Period::Min1 => "m1",
+            Period::Min5 => "m5",
+            Period::Min15 => "m15",
+            Period::Min30 => "m30",
+            Period::Min60 => "m60",
+        }
+    }
+
+    /// 人类可读标签(报告/日志)。
+    pub fn label(&self) -> &'static str {
+        match self {
+            Period::Day => "日K",
+            Period::Min1 => "1分",
+            Period::Min5 => "5分",
+            Period::Min15 => "15分",
+            Period::Min30 => "30分",
+            Period::Min60 => "60分",
+        }
+    }
+
+    pub fn is_intraday(&self) -> bool {
+        !matches!(self, Period::Day)
+    }
+
+    /// 东财 kline 接口的 klt 参数。
+    pub fn eastmoney_klt(&self) -> &'static str {
+        match self {
+            Period::Day => "101",
+            Period::Min1 => "1",
+            Period::Min5 => "5",
+            Period::Min15 => "15",
+            Period::Min30 => "30",
+            Period::Min60 => "60",
+        }
+    }
+
+    /// 新浪 getKLineData 的 scale 参数(分钟数;日线用 240)。
+    pub fn sina_scale(&self) -> &'static str {
+        match self {
+            Period::Day => "240",
+            Period::Min1 => "1",
+            Period::Min5 => "5",
+            Period::Min15 => "15",
+            Period::Min30 => "30",
+            Period::Min60 => "60",
+        }
+    }
+
+    /// 一年的 bar 数,用于年化(收益/夏普/Alpha)。A股每交易日约 240 分钟,
+    /// 按 252 交易日折算;分钟线年化本身是近似,常数取整已足够。
+    pub fn bars_per_year(&self) -> f64 {
+        const TRADING_DAYS: f64 = 252.0;
+        const MINUTES_PER_DAY: f64 = 240.0;
+        let per_day = match self {
+            Period::Day => return TRADING_DAYS,
+            Period::Min1 => MINUTES_PER_DAY,
+            Period::Min5 => MINUTES_PER_DAY / 5.0,
+            Period::Min15 => MINUTES_PER_DAY / 15.0,
+            Period::Min30 => MINUTES_PER_DAY / 30.0,
+            Period::Min60 => MINUTES_PER_DAY / 60.0,
+        };
+        TRADING_DAYS * per_day
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KLine {
     pub code: String,
@@ -176,6 +272,37 @@ mod tests {
         assert_eq!(infer_market("510300"), Some(Market::SH)); // 沪市 ETF
         assert_eq!(infer_market("113050"), Some(Market::SH)); // 沪市转债
         assert_eq!(infer_market("abc"), None);
+    }
+
+    #[test]
+    fn period_parse_aliases_and_tags() {
+        assert_eq!(Period::parse("d"), Some(Period::Day));
+        assert_eq!(Period::parse("daily"), Some(Period::Day));
+        assert_eq!(Period::parse("5m"), Some(Period::Min5));
+        assert_eq!(Period::parse("m5"), Some(Period::Min5));
+        assert_eq!(Period::parse("60m"), Some(Period::Min60));
+        assert_eq!(Period::parse("1h"), Some(Period::Min60));
+        assert_eq!(Period::parse("xyz"), None);
+        // tag() 必须能被 parse() 往返,报错信息里用 tag() 提示才成立。
+        for p in [
+            Period::Day,
+            Period::Min1,
+            Period::Min5,
+            Period::Min15,
+            Period::Min30,
+            Period::Min60,
+        ] {
+            assert_eq!(Period::parse(p.tag()), Some(p));
+        }
+    }
+
+    #[test]
+    fn period_bars_per_year() {
+        assert_eq!(Period::Day.bars_per_year(), 252.0);
+        // 5分钟:252 交易日 × (240/5) 根 = 12096
+        assert_eq!(Period::Min5.bars_per_year(), 252.0 * 48.0);
+        assert_eq!(Period::Min60.bars_per_year(), 252.0 * 4.0);
+        assert!(Period::Min1.bars_per_year() > Period::Day.bars_per_year());
     }
 
     #[test]

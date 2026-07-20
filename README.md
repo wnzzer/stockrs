@@ -10,7 +10,8 @@
 
 - 📊 多数据源容灾：东方财富为主，腾讯、新浪自动故障切换，无需 API Key
 - 💾 SQLite 单文件存储，零部署
-- 📈 内置技术指标：MA / EMA / RSI / MACD / KDJ / BOLL
+- 📈 内置技术指标：MA / EMA / RSI / MACD / KDJ / BOLL，量价 API（量比 / 成交量均线）
+- ⏱️ 多周期：日线与 1/5/15/30/60 分钟线共用同一回测管线，年化因子按周期自适应
 - 💹 基本面数据：历史日度 PE / PB / PS / 总市值，支持技术面 + 基本面双重验证回测
 - 🇭🇰 港股支持：行情 / 日K / 基本面(PE/PB) / 回测，逐股每手股数 + 港股费用模型 + 货币隔离
 - 🧪 Rhai 嵌入式脚本策略引擎，回测避免未来函数（次日开盘成交）
@@ -56,13 +57,13 @@ stockrs portfolio history
 
 | 命令 | 说明 |
 | --- | --- |
-| `data add <code...>` | 添加股票并下载日K |
-| `data update [code...]` | 增量更新日K（缺省更新全部） |
+| `data add <code...> [--period 5m]` | 添加股票并下载K线（`--period` 支持 d/1m/5m/15m/30m/60m） |
+| `data update [code...] [--period 5m]` | 增量更新K线（缺省更新全部日K） |
 | `data remove <code>` | 移除跟踪 |
-| `data list` / `data info <code>` | 查看列表 / 单只数据信息 |
+| `data list` / `data info <code> [--period 5m]` | 查看列表 / 单只数据信息 |
 | `quote <code...>` | 实时行情 |
 | `indicator <code> [--period N]` | 最新技术指标 |
-| `backtest <script> --stock <code> [--start --end --capital]` | 单标的回测 |
+| `backtest <script> --stock <code> [--start --end --capital] [--period 5m]` | 单标的回测 |
 | `backtest <script> --stocks a,b,c` / `--universe` | 多股票组合回测 |
 | `backtest <script> ... --benchmark hs300` | 叠加基准对比（收益/超额/Alpha/Beta） |
 | `backtest <script> ... --param k=v1,v2 [--optimize sharpe]` | 参数扫描（网格寻优） |
@@ -109,7 +110,8 @@ fn on_bar(ctx) {
 | 分类 | 方法 |
 | --- | --- |
 | 行情 | `ctx.open` `ctx.high` `ctx.low` `ctx.close` `ctx.volume` `ctx.date` |
-| 历史 | `ctx.close_at(n)` `ctx.sma_at(period, n)` |
+| 历史 | `ctx.close_at(n)` `ctx.volume_at(n)` `ctx.sma_at(period, n)` |
+| 量能 | `ctx.vma(p)`（成交量均线） `ctx.volume_ratio(p)`（量比＝当前量/p 日均量，>1 放量） |
 | 指标 | `ctx.sma(p)` `ctx.ema(p)` `ctx.rsi(p)` `ctx.macd(f,s,sig)` `ctx.kdj(p)` `ctx.boll(p,mult)` |
 | 账户 | `ctx.position()` `ctx.cash()` `ctx.total_value()` `ctx.max_shares()` |
 | 基本面 | `ctx.pe` `ctx.pb` `ctx.ps` `ctx.mktcap`（按 bar 对齐，无数据 NaN） |
@@ -117,6 +119,24 @@ fn on_bar(ctx) {
 | 交易 | `ctx.buy(price, shares)` `ctx.sell(price, shares)` |
 
 `macd` / `kdj` / `boll` 返回长度为 3 的数组。指标数据不足时返回 `NaN`，脚本可用 `x != x` 判断。
+
+## 分钟线回测
+
+日线与分钟线共用同一套数据/回测管线，差异仅由 `--period` 一个参数收口，可选
+`d`（默认）`1m` `5m` `15m` `30m` `60m`。同一只股票的不同周期各自独立存储，互不覆盖。
+
+```bash
+stockrs data update --period 5m 600519          # 先拉 5 分钟线
+stockrs data info 600519 --period 5m            # 查看 5 分钟线数据范围
+stockrs backtest strategies/vol_breakout.rhai --stock 600519 --period 5m
+```
+
+- **量价策略**：分钟线配合 `ctx.volume_ratio(p)` / `ctx.vma(p)` 判断放量/缩量、尾盘承接。
+- **年化自适应**：收益/夏普/Alpha 的年化因子按周期自动折算（日线 252，分钟线按每日
+  240 分钟换算），不会把分钟收益误当日收益年化。
+- **数据源**：分钟线由东财 / 新浪提供（腾讯仅日线，回测时自动跳过）；新浪单次约 1023 条，
+  东财更长但偶发限流，二者故障切换兜底。
+- 回测前需先 `data update --period <同周期>` 拉取对应数据，否则提示数据不足。
 
 ## 组合回测
 
@@ -217,7 +237,7 @@ stockrs backtest strategies/sma_cross.rhai --stock 00700 --start 2020-01-01
 - 初始资金默认 10 万，可用 `--capital` 覆盖
 - 手续费：买入万三，卖出万三 + 千一印花税
 - 最小交易单位 100 股（1 手），资金不足自动下调到可负担整手数
-- **信号在当日收盘计算，次日开盘成交**，避免未来函数
+- **信号在当根 bar 收盘计算，下一根 bar 开盘成交**（日线即次日开盘，分钟线即下一分钟段开盘），避免未来函数
 
 ## 数据来源
 

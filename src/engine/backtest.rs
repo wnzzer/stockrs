@@ -16,6 +16,7 @@ where
 {
     let n = ctx.0.lock().unwrap().klines.len();
     let initial = ctx.0.lock().unwrap().cash;
+    let bars_per_year = ctx.0.lock().unwrap().period.bars_per_year();
 
     for i in 0..n {
         {
@@ -32,7 +33,7 @@ where
     }
 
     let s = ctx.0.lock().unwrap();
-    let metrics = metrics::compute(initial, &s.equity, &s.trades);
+    let metrics = metrics::compute(initial, &s.equity, &s.trades, bars_per_year);
     Ok(BacktestResult {
         metrics,
         trades: s.trades.clone(),
@@ -127,6 +128,7 @@ mod tests {
             &[],
             100,
             crate::engine::rules::FeeModel::a_share(),
+            crate::data::Period::Day,
         );
         let mut bar = 0;
         let c = ctx.clone();

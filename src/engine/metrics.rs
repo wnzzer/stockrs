@@ -10,7 +10,7 @@ pub struct Benchmark {
     pub excess: f64,
     /// 相对基准的 Beta；样本不足时为 NaN
     pub beta: f64,
-    /// 年化 Alpha（日 alpha × 252）；样本不足时为 NaN
+    /// 年化 Alpha（每 bar alpha × bars_per_year）；样本不足时为 NaN
     pub alpha_annual: f64,
 }
 
@@ -30,6 +30,7 @@ pub fn compute_benchmark(
     code: String,
     strat_equity: &[f64],
     bench_equity: &[f64],
+    bars_per_year: f64,
 ) -> Benchmark {
     let n = strat_equity.len().min(bench_equity.len());
     let strat_return = ret_over(&strat_equity[..n]);
@@ -51,8 +52,8 @@ pub fn compute_benchmark(
         }
         if var_b > 0.0 {
             let beta = cov / var_b;
-            let alpha_daily = ms - beta * mb;
-            (beta, alpha_daily * 252.0)
+            let alpha_per_bar = ms - beta * mb;
+            (beta, alpha_per_bar * bars_per_year)
         } else {
             (f64::NAN, f64::NAN)
         }
@@ -90,7 +91,12 @@ pub struct Metrics {
     pub total_trades: usize,
 }
 
-pub fn compute(initial: f64, equity: &[f64], trades: &[TradeRec]) -> Metrics {
+pub fn compute(
+    initial: f64,
+    equity: &[f64],
+    trades: &[TradeRec],
+    bars_per_year: f64,
+) -> Metrics {
     let final_value = equity.last().copied().unwrap_or(initial);
     let total_return = if initial != 0.0 {
         final_value / initial - 1.0
@@ -98,8 +104,8 @@ pub fn compute(initial: f64, equity: &[f64], trades: &[TradeRec]) -> Metrics {
         0.0
     };
 
-    let days = equity.len().max(1);
-    let years = days as f64 / 252.0;
+    let bars = equity.len().max(1);
+    let years = bars as f64 / bars_per_year;
     let annual_return = if years > 0.0 && final_value > 0.0 && initial > 0.0 {
         (final_value / initial).powf(1.0 / years) - 1.0
     } else {
@@ -133,7 +139,7 @@ pub fn compute(initial: f64, equity: &[f64], trades: &[TradeRec]) -> Metrics {
         let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / rets.len() as f64;
         let sd = var.sqrt();
         if sd > 0.0 {
-            mean / sd * (252f64).sqrt()
+            mean / sd * bars_per_year.sqrt()
         } else {
             0.0
         }
@@ -176,7 +182,7 @@ mod tests {
         // 策略逐日收益恰为基准的 2 倍 => Beta≈2, Alpha≈0
         let bench = vec![100.0, 110.0, 104.5, 106.59]; // 收益 +0.10,-0.05,+0.02
         let strat = vec![100.0, 120.0, 108.0, 112.32]; // 收益 +0.20,-0.10,+0.04
-        let b = compute_benchmark("HS300".into(), "000300".into(), &strat, &bench);
+        let b = compute_benchmark("HS300".into(), "000300".into(), &strat, &bench, 252.0);
         assert!((b.beta - 2.0).abs() < 1e-6, "beta={}", b.beta);
         assert!(b.alpha_annual.abs() < 1e-6, "alpha={}", b.alpha_annual);
         assert!((b.total_return - (106.59 / 100.0 - 1.0)).abs() < 1e-9);
@@ -185,7 +191,7 @@ mod tests {
 
     #[test]
     fn benchmark_insufficient_samples() {
-        let b = compute_benchmark("X".into(), "0".into(), &[100.0], &[100.0]);
+        let b = compute_benchmark("X".into(), "0".into(), &[100.0], &[100.0], 252.0);
         assert!(b.beta.is_nan());
         assert!(b.alpha_annual.is_nan());
     }

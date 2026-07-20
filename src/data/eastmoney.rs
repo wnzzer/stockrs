@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::models::{secid, KLine, Market, Quote};
+use super::models::{secid, KLine, Market, Period, Quote};
 use super::source::{http_client, KlineSource, QuoteSource};
 
 const KLINE_URL: &str = "https://push2his.eastmoney.com/api/qt/stock/kline/get";
@@ -17,12 +17,14 @@ impl KlineSource for Eastmoney {
         "eastmoney"
     }
 
-    /// 拉取日K线（前复权）。东财 klines 字段顺序由 fields2 决定，这里固定为：
-    /// 日期,开,收,高,低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+    /// 拉取K线（前复权）。东财 klines 字段顺序由 fields2 决定，这里固定为：
+    /// 日期,开,收,高,低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率。
+    /// 分钟线只是 klt 不同,响应结构与日线完全一致(date 字段带 " HH:MM")。
     async fn klines(
         &self,
         code: &str,
         market: Market,
+        period: Period,
         beg: &str,
         end: &str,
     ) -> Result<(String, Vec<KLine>)> {
@@ -33,7 +35,7 @@ impl KlineSource for Eastmoney {
                 ("secid", secid.as_str()),
                 ("fields1", "f1,f2,f3,f4,f5,f6"),
                 ("fields2", "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"),
-                ("klt", "101"),
+                ("klt", period.eastmoney_klt()),
                 ("fqt", "1"),
                 ("beg", beg),
                 ("end", end),

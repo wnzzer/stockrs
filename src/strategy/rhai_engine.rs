@@ -20,6 +20,11 @@ pub fn build_engine() -> Engine {
 
     // 历史
     engine.register_fn("close_at", Ctx::close_at);
+    engine.register_fn("volume_at", Ctx::volume_at);
+
+    // 量能
+    engine.register_fn("vma", Ctx::vma);
+    engine.register_fn("volume_ratio", Ctx::volume_ratio);
 
     // 指标
     engine.register_fn("sma", Ctx::sma);
