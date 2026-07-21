@@ -23,7 +23,19 @@ pub enum PortfolioCmd {
         #[arg(long)]
         note: Option<String>,
     },
-    /// 移除持仓
+    /// 卖出(减仓/清仓),记录已实现盈亏
+    Sell {
+        code: String,
+        #[arg(long)]
+        price: f64,
+        #[arg(long)]
+        quantity: i64,
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// 移除持仓(不记录卖出,仅纠正误录)
     Remove { code: String },
     /// 当前持仓 + 实时盈亏
     List,
@@ -34,7 +46,7 @@ pub enum PortfolioCmd {
 }
 
 pub async fn run(cmd: PortfolioCmd) -> Result<()> {
-    let store = Store::open_default()?;
+    let mut store = Store::open_default()?;
     match cmd {
         PortfolioCmd::Add {
             code,
@@ -46,6 +58,36 @@ pub async fn run(cmd: PortfolioCmd) -> Result<()> {
             let date = date.unwrap_or_else(today);
             store.add_position(&code, price, quantity, &date, note.as_deref())?;
             println!("已添加持仓 {} {}股 @ {}", code, quantity, price);
+            Ok(())
+        }
+        PortfolioCmd::Sell {
+            code,
+            price,
+            quantity,
+            date,
+            note,
+        } => {
+            let date = date.unwrap_or_else(today);
+            let o = store.sell_position(&code, price, quantity, &date, note.as_deref())?;
+            let pct = if o.avg_cost != 0.0 {
+                (price - o.avg_cost) / o.avg_cost * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "已卖出 {} {}股 @ {:.3}  成本 ¥{:.3}  已实现盈亏 ¥{} ({:+.2}%)",
+                code,
+                o.sold_qty,
+                price,
+                o.avg_cost,
+                money(o.realized_pnl),
+                pct
+            );
+            if o.remaining_qty == 0 {
+                println!("已清仓 {}", code);
+            } else {
+                println!("剩余持仓 {}股", o.remaining_qty);
+            }
             Ok(())
         }
         PortfolioCmd::Remove { code } => {
@@ -60,6 +102,14 @@ pub async fn run(cmd: PortfolioCmd) -> Result<()> {
         PortfolioCmd::History => history(&store),
         PortfolioCmd::Stats { code } => stats(&store, &code),
     }
+}
+
+fn print_realized(store: &Store, code: Option<&str>) -> Result<()> {
+    let realized = store.realized_pnl(code)?;
+    if realized != 0.0 {
+        println!("已实现盈亏 ¥{}", money(realized));
+    }
+    Ok(())
 }
 
 async fn list(store: &Store) -> Result<()> {
@@ -118,11 +168,12 @@ async fn list(store: &Store) -> Result<()> {
         0.0
     };
     println!(
-        "合计市值 ¥{}  盈亏 ¥{} ({:+.2}%)",
+        "合计市值 ¥{}  浮动盈亏 ¥{} ({:+.2}%)",
         money(total_value),
         money(total_pnl),
         total_pct * 100.0
     );
+    print_realized(store, None)?;
     Ok(())
 }
 
@@ -133,18 +184,37 @@ fn history(store: &Store) -> Result<()> {
         return Ok(());
     }
     let mut table = Table::new();
-    table.set_header(vec!["日期", "代码", "方向", "价格", "数量", "备注"]);
+    table.set_header(vec![
+        "日期",
+        "代码",
+        "方向",
+        "价格",
+        "数量",
+        "成本",
+        "已实现盈亏",
+        "备注",
+    ]);
     for t in trades {
+        let action = if t.action == "buy" {
+            "买入"
+        } else if t.action == "sell" {
+            "卖出"
+        } else {
+            &t.action
+        };
         table.add_row(vec![
             t.date,
             t.code,
-            t.action,
-            format!("{:.2}", t.price),
+            action.to_string(),
+            format!("{:.3}", t.price),
             t.quantity.to_string(),
+            t.cost_basis.map_or("--".into(), |c| format!("{:.3}", c)),
+            t.pnl.map_or("--".into(), money),
             t.note.unwrap_or_default(),
         ]);
     }
     println!("{table}");
+    print_realized(store, None)?;
     Ok(())
 }
 
@@ -156,6 +226,13 @@ fn stats(store: &Store, code: &str) -> Result<()> {
         .filter(|p| p.code == code)
         .collect();
     if positions.is_empty() {
+        // 已清仓:无浮动持仓可分析,但若有已实现盈亏则展示之,而非直接报错。
+        if store.realized_pnl(Some(code))? != 0.0 {
+            let name = store.get_stock(code)?.map(|s| s.name).unwrap_or_default();
+            println!("{} {} 已清仓", code, name);
+            print_realized(store, Some(code))?;
+            return Ok(());
+        }
         return Err(anyhow!("{} 无持仓", code));
     }
     let qty: i64 = positions.iter().map(|p| p.quantity).sum();
@@ -224,5 +301,6 @@ fn stats(store: &Store, code: &str) -> Result<()> {
     println!("{}", "─".repeat(46));
     println!("收益曲线(浮盈%)：");
     println!("{}", sparkline(&s.pnl_pct_series, 46));
+    print_realized(store, Some(code))?;
     Ok(())
 }

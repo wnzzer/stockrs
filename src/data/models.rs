@@ -251,11 +251,15 @@ pub struct Position {
 pub struct Trade {
     pub id: i64,
     pub code: String,
-    pub action: String,
+    pub action: String, // "buy" / "sell"
     pub price: f64,
     pub quantity: i64,
     pub date: String,
     pub note: Option<String>,
+    /// 卖出结算成本(被卖股份的 FIFO 原始成本均价);买入为 None。
+    pub cost_basis: Option<f64>,
+    /// 卖出的已实现盈亏(不含手续费);买入为 None。
+    pub pnl: Option<f64>,
 }
 
 #[cfg(test)]

@@ -1,10 +1,10 @@
 /// 金额千分位格式化，如 100000.0 -> "100,000.00"。
+/// 在整分上取整，进位正确传导到整数位（避免 1.999 → "1.100" 这类分位溢出）。
 pub fn money(v: f64) -> String {
-    let sign = if v < 0.0 { "-" } else { "" };
-    let v = v.abs();
-    let int_part = v.trunc() as i64;
-    let frac = ((v - int_part as f64) * 100.0).round() as i64;
-    format!("{}{}.{:02}", sign, thousands(int_part), frac)
+    let cents = (v.abs() * 100.0).round() as i64;
+    // 四舍五入到 0 分的微小负数不显示负号，避免 "-0.00"。
+    let sign = if v < 0.0 && cents != 0 { "-" } else { "" };
+    format!("{}{}.{:02}", sign, thousands(cents / 100), cents % 100)
 }
 
 /// 字符的终端显示宽度：CJK / 全角字符占 2 列，其余占 1 列。
@@ -88,4 +88,25 @@ fn thousands(n: i64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn money_carries_cents_into_integer() {
+        // 常规值
+        assert_eq!(money(0.0), "0.00");
+        assert_eq!(money(2.5), "2.50");
+        assert_eq!(money(1234.5), "1,234.50");
+        assert_eq!(money(100000.0), "100,000.00");
+        assert_eq!(money(-1680.0), "-1,680.00");
+        // 分位进位:不得出现 "1.100" 这类溢出
+        assert_eq!(money(1.999), "2.00");
+        assert_eq!(money(99.999), "100.00");
+        assert_eq!(money(-1.999), "-2.00");
+        // 舍入到 0 分的微小负数不显示负号
+        assert_eq!(money(-0.001), "0.00");
+    }
 }

@@ -49,6 +49,7 @@ stockrs backtest strategies/sma_cross.rhai --stock 000858 --start 2023-01-01 --e
 
 # 6. 持仓管理
 stockrs portfolio add 000858 --price 120 --quantity 500
+stockrs portfolio sell 000858 --price 135 --quantity 200   # 减仓,记录已实现盈亏
 stockrs portfolio list
 stockrs portfolio history
 ```
@@ -68,7 +69,8 @@ stockrs portfolio history
 | `backtest <script> ... --benchmark hs300` | 叠加基准对比（收益/超额/Alpha/Beta） |
 | `backtest <script> ... --param k=v1,v2 [--optimize sharpe]` | 参数扫描（网格寻优） |
 | `strategy new <file>` | 生成带完整 ctx API 注释的策略模板（脚手架） |
-| `portfolio add/remove/list/history` | 持仓管理 |
+| `portfolio add/remove/list/history` | 持仓管理（`remove` 仅纠正误录，不记账） |
+| `portfolio sell <code> --price --quantity [--date --note]` | 卖出/减仓，记录已实现盈亏（多批建仓按先进先出 FIFO 计成本） |
 | `portfolio stats <code>` | 持仓收益分析（曲线/回撤/日均收益） |
 | `self-update [--check]` | 更新 stockrs 自身到最新版本 |
 
