@@ -97,6 +97,10 @@ impl Store {
                 total_mv REAL,
                 PRIMARY KEY (code, date)
             );
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )?;
         // 迁移:老库 stocks 表补 lot_size 列(SQLite 无 ADD COLUMN IF NOT EXISTS)。
@@ -465,6 +469,38 @@ impl Store {
             sold_qty: quantity,
             remaining_qty: total_qty - quantity,
         })
+    }
+
+    // ---- meta (键值杂项:现金余额等) ----
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM meta WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(r.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 现金余额(手动维护,不随买卖自动增减)。未设置/损坏/非有限值均返回 None,
+    /// 避免 NaN/Inf 污染仪表盘总资产。
+    pub fn get_cash(&self) -> Result<Option<f64>> {
+        Ok(self
+            .get_meta("cash")?
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| v.is_finite()))
+    }
+
+    pub fn set_cash(&self, amount: f64) -> Result<()> {
+        self.set_meta("cash", &amount.to_string())
     }
 
     /// 已实现盈亏合计。code=None 为全部,Some 为单只。

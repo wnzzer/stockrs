@@ -50,8 +50,9 @@ stockrs backtest strategies/sma_cross.rhai --stock 000858 --start 2023-01-01 --e
 # 6. 持仓管理
 stockrs portfolio add 000858 --price 120 --quantity 500
 stockrs portfolio sell 000858 --price 135 --quantity 200   # 减仓,记录已实现盈亏
-stockrs portfolio list
-stockrs portfolio history
+stockrs portfolio cash 5163                                 # 设置现金(计入总资产)
+stockrs portfolio list                                     # 仪表盘:今日/累计/已实现/总资产
+stockrs portfolio stats --all                              # 全部持仓收益分析 + 基准对比
 ```
 
 ## 命令一览
@@ -69,9 +70,11 @@ stockrs portfolio history
 | `backtest <script> ... --benchmark hs300` | 叠加基准对比（收益/超额/Alpha/Beta） |
 | `backtest <script> ... --param k=v1,v2 [--optimize sharpe]` | 参数扫描（网格寻优） |
 | `strategy new <file>` | 生成带完整 ctx API 注释的策略模板（脚手架） |
-| `portfolio add/remove/list/history` | 持仓管理（`remove` 仅纠正误录，不记账） |
+| `portfolio add/remove/history` | 持仓管理（`remove` 仅纠正误录，不记账） |
+| `portfolio list` | 账户仪表盘：持仓 + 今日涨跌/今日盈亏 + 今日/累计/已实现/总资产一屏汇总 |
 | `portfolio sell <code> --price --quantity [--date --note]` | 卖出/减仓，记录已实现盈亏（多批建仓按先进先出 FIFO 计成本） |
-| `portfolio stats <code>` | 持仓收益分析（曲线/回撤/日均收益） |
+| `portfolio cash [金额]` | 设置/查看现金余额（手动维护，计入仪表盘总资产） |
+| `portfolio stats [code] [--all] [--benchmark hs300]` | 持仓收益分析（曲线/回撤/日均/基准对比）；省略代码或 `--all` 分析全部 |
 | `self-update [--check]` | 更新 stockrs 自身到最新版本 |
 
 > **指数代码说明**：指数与同码股票靠 6 位数字无法区分（`000001` 既是上证指数

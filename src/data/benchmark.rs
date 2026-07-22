@@ -23,6 +23,22 @@ pub fn resolve(input: &str) -> Option<(&'static str, &'static str, Market)> {
     Some(r)
 }
 
+/// 按标的代码/市场自动选默认基准别名(供持仓基准对比,可被 --benchmark 覆盖)。
+/// 科创板股票 688* / 科创板 ETF 588*·589* → 科创50;创业板 3* → 创业板指;其余 → 沪深300。
+/// 港股暂无内置指数基准,返回 None(调用方跳过对比)。
+pub fn benchmark_for(code: &str, market: Market) -> Option<&'static str> {
+    if market == Market::HK {
+        return None;
+    }
+    if code.starts_with("688") || code.starts_with("588") || code.starts_with("589") {
+        Some("kc50")
+    } else if code.starts_with('3') {
+        Some("cyb")
+    } else {
+        Some("hs300")
+    }
+}
+
 /// CLI 代码入口解析,在股票/基金/港股之外额外识别指数:
 /// - 交易所前缀 `sh000001`/`sz399001` → 强制市场,消解指数与同码股票的歧义
 ///   (上证指数 secid `1.000001` vs 平安银行 `0.000001`)。
@@ -93,6 +109,17 @@ pub async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn benchmark_for_by_board() {
+        assert_eq!(benchmark_for("601677", Market::SH), Some("hs300")); // 沪市主板
+        assert_eq!(benchmark_for("000858", Market::SZ), Some("hs300")); // 深市主板
+        assert_eq!(benchmark_for("688111", Market::SH), Some("kc50")); // 科创板股票
+        assert_eq!(benchmark_for("588000", Market::SH), Some("kc50")); // 科创50 ETF
+        assert_eq!(benchmark_for("589850", Market::SH), Some("kc50")); // 科创板 ETF
+        assert_eq!(benchmark_for("300750", Market::SZ), Some("cyb")); // 创业板
+        assert_eq!(benchmark_for("00700", Market::HK), None); // 港股暂无内置基准
+    }
 
     #[test]
     fn resolve_aliases_and_market() {
