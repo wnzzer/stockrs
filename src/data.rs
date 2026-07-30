@@ -7,6 +7,7 @@ pub mod sina;
 pub mod source;
 pub mod store;
 pub mod tencent;
+pub mod xueqiu;
 
 pub use benchmark::resolve_input;
 #[allow(unused_imports)]

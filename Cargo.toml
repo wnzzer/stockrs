@@ -21,6 +21,11 @@ rhai = { version = "1.19", features = ["sync"] }
 directories = "5"
 async-trait = "0.1"
 encoding_rs = "0.8"
+# 雪球不带 Accept-Encoding: gzip 就返回空 body。这里手工解压而不是开 reqwest 的
+# gzip feature：flate2 已经在依赖树里(self_update 的 compression-flate2)，等于零新增
+# crate；开 reqwest gzip 会额外拖进 async-compression，还会改变其余三个源的请求头。
+# default 特性即纯 Rust 后端(miniz_oxide)，不引 C 库。
+flate2 = "1"
 
 # self_update 用 ureq 后端(自带 ring)，避免 reqwest 的 rustls feature 把 aws-lc-rs 拖进来。
 # 非 Windows 只需 tar.gz，去掉 zip/zopfli 压缩栈。

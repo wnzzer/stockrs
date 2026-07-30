@@ -8,7 +8,7 @@
 
 ## 特性
 
-- 📊 多数据源容灾：东方财富为主，腾讯、新浪自动故障切换，无需 API Key
+- 📊 多数据源容灾：东方财富为主，腾讯、雪球、新浪自动故障切换，无需 API Key
 - 💾 SQLite 单文件存储，零部署
 - 📈 内置技术指标：MA / EMA / RSI / MACD / KDJ / BOLL，量价 API（量比 / 成交量均线）
 - ⏱️ 多周期：日线与 1/5/15/30/60 分钟线共用同一回测管线，年化因子按周期自适应
@@ -252,7 +252,26 @@ stockrs backtest strategies/sma_cross.rhai --stock 00700 --start 2020-01-01
 | --- | --- | --- | --- | --- | --- |
 | 1 | 东方财富 | ✅ | ✅ 前复权 | ✅ | 字段最全（含成交额、换手率），全历史区间；实时主机 push2 偶发不可达时切下一源 |
 | 2 | 腾讯 `qt.gtimg.cn` | ✅ | ✅ 前复权 | ✅ A股+港股 | 支持区间，单次约 640 条 |
-| 3 | 新浪 `hq.sinajs.cn` | ✅ | ⚠️ 非前复权 | ❌ | 日K仅最近约 1023 条，无成交额、无估值 |
+| 3 | 雪球 `stock.xueqiu.com` | ✅ A股+港股 | 🔑 前复权 | ❌ | 行情批量且免登录，但**不返回股票名称**；日K需登录 token（见下） |
+| 4 | 新浪 `hq.sinajs.cn` | ✅ | ⚠️ 非前复权 | ❌ | 日K仅最近约 1023 条，无成交额、无估值 |
+
+`quote` 可用 `--source` 强制单一源（不故障切换，失败直接报错），便于排查某源是否可用：
+
+```bash
+stockrs quote 600519 --source xueqiu     # eastmoney / tencent / xueqiu / sina
+```
+
+**雪球的三个坑**（逆向所得，注释在 `src/data/xueqiu.rs`）：
+
+- **不声明 gzip 会拿到 200 + 空 body**（不是报错码）。项目 reqwest 未开 gzip feature，故手工 `Accept-Encoding: gzip` + flate2 解压
+- **UA 不能是 `curl/*`**（直接 403 IP Blacklisted），项目自带 UA 可用
+- **K线需要登录 cookie**：匿名调用返回 `error_code 400016`。把浏览器 cookie 里 `xq_a_token` 的值设入环境变量 `XUEQIU_TOKEN` 即可；未设置时该源在日K链上快速失败并切下一个源，行情不受影响
+
+```bash
+export XUEQIU_TOKEN='浏览器 cookie 里 xq_a_token 的值'
+```
+
+雪球排在腾讯之后而非之前：其 `quotec` 不返回名称与 PE/PB，插到腾讯前会在东财失效时白丢这两样。
 
 **估值（PE/PB）的三层保障：** `quote` 的 PE/PB 依次取自 **东财实时 → 腾讯实时 → 本地基本面表**
 （`fundamentals`，截至最近收盘，回退值标 `*` 并附脚注）。东财实时主机（push2）与基本面主机
@@ -262,7 +281,7 @@ stockrs backtest strategies/sma_cross.rhai --stock 00700 --start 2020-01-01
 
 **礼貌爬取（避免把接口打挂）：**
 
-- **批量优先**：`quote` 多只、`portfolio list` 刷新用批量接口（新浪 `list=`、腾讯 `q=`、东财 `ulist.np`），N 个请求压成 1 个，是最有效的一招
+- **批量优先**：`quote` 多只、`portfolio list` 刷新用批量接口（新浪 `list=`、腾讯 `q=`、东财 `ulist.np`、雪球 `quotec` 逗号分隔），N 个请求压成 1 个，是最有效的一招
 - **有界并发**：`data update` 多只时并发上限 4（`tokio::Semaphore`），只并行网络 IO，SQLite 写入仍串行
 - **抖动 + 退避重试**：每请求前加 0~400ms 抖动打散齐射；失败按 300ms→600ms→1200ms 指数退避重试 3 次
 - **增量更新**：只拉本地缺失的日期段，平时更新量很小

@@ -34,11 +34,14 @@ pub enum Commands {
 
     /// 实时行情查询
     #[command(
-        after_help = "PE/PB 依次取自 东财实时 → 腾讯实时(A股/港股) → 本地基本面;\n带 * 者来自本地基本面(截至最近收盘),实时源未提供。"
+        after_help = "PE/PB 依次取自 东财实时 → 腾讯实时(A股/港股) → 本地基本面;\n带 * 者来自本地基本面(截至最近收盘),实时源未提供。\n\n默认按 东财 → 腾讯 → 雪球 → 新浪 故障切换;--source 可强制单一源\n(不切换,失败直接报错),取值 eastmoney/tencent/xueqiu/sina。\n注意雪球 quotec 不返回名称与 PE/PB。"
     )]
     Quote {
         /// 一个或多个代码（指数用 sh000001/上证指数/hs300）
         codes: Vec<String>,
+        /// 强制指定行情源（eastmoney/tencent/xueqiu/sina），缺省为故障切换
+        #[arg(long)]
+        source: Option<String>,
     },
 
     /// 技术指标展示
@@ -106,7 +109,7 @@ pub enum Commands {
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Data(cmd) => data::run(cmd).await,
-        Commands::Quote { codes } => quote::run(codes).await,
+        Commands::Quote { codes, source } => quote::run(codes, source.as_deref()).await,
         Commands::Indicator { code, period } => indicator::run(code, period).await,
         Commands::Backtest {
             script,

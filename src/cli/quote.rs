@@ -3,7 +3,7 @@ use comfy_table::Table;
 
 use crate::data::{resolve_input, source, Store};
 
-pub async fn run(codes: Vec<String>) -> Result<()> {
+pub async fn run(codes: Vec<String>, force_source: Option<&str>) -> Result<()> {
     if codes.is_empty() {
         return Err(anyhow!("请提供至少一个股票代码"));
     }
@@ -14,7 +14,10 @@ pub async fn run(codes: Vec<String>) -> Result<()> {
         reqs.push((code, market));
     }
 
-    let (quotes, failed) = source::fetch_quotes(&reqs).await?;
+    let (quotes, failed) = match force_source {
+        Some(name) => source::fetch_quotes_from(name, &reqs).await?,
+        None => source::fetch_quotes(&reqs).await?,
+    };
 
     // 实时源(腾讯/新浪)不带 PE/PB;缺失时回退本地基本面表(东财 datacenter / 百度,
     // 与行情主机独立,行情主机挂了它常仍可用)。best-effort:开库失败就跳过兜底。

@@ -14,6 +14,39 @@ pub fn days_since(date: &str) -> Option<i64> {
     Some(today_days() - parse_ymd(date)?)
 }
 
+/// 现在距 epoch 的毫秒数。
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// "YYYY-MM-DD" → 该日北京时间 00:00 距 epoch 的毫秒数;date 非法时返回 None。
+pub fn to_epoch_ms(date: &str) -> Option<i64> {
+    // 北京时间 00:00 比 UTC 同日 00:00 早 8 小时。
+    parse_ymd(date).map(|d| (d * 86_400 - 8 * 3_600) * 1_000)
+}
+
+/// epoch 毫秒 → 北京时间 "YYYY-MM-DD";with_time 为真时附 " HH:MM"(分钟线用)。
+pub fn from_epoch_ms(ms: i64, with_time: bool) -> String {
+    let secs = ms.div_euclid(1_000) + 8 * 3_600; // → 北京时间
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    if with_time {
+        let rem = secs.rem_euclid(86_400);
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            y,
+            m,
+            d,
+            rem / 3_600,
+            (rem % 3_600) / 60
+        )
+    } else {
+        format!("{:04}-{:02}-{:02}", y, m, d)
+    }
+}
+
 /// 今天(北京时间)距 1970-01-01 的天数。
 fn today_days() -> i64 {
     let secs = SystemTime::now()
@@ -81,6 +114,22 @@ mod tests {
         let a = parse_ymd("2024-01-01").unwrap();
         let b = parse_ymd("2024-12-31").unwrap();
         assert_eq!(b - a, 365); // 2024 是闰年
+    }
+
+    #[test]
+    fn epoch_ms_roundtrip_beijing() {
+        // 北京时间 2024-01-02 00:00 = UTC 2024-01-01 16:00
+        let ms = to_epoch_ms("2024-01-02").unwrap();
+        assert_eq!(
+            ms,
+            (parse_ymd("2024-01-02").unwrap() * 86_400 - 8 * 3_600) * 1_000
+        );
+        assert_eq!(from_epoch_ms(ms, false), "2024-01-02");
+        assert_eq!(from_epoch_ms(ms, true), "2024-01-02 00:00");
+        // 盘中时刻:北京 2024-01-02 14:30
+        let intraday = ms + (14 * 3_600 + 30 * 60) * 1_000;
+        assert_eq!(from_epoch_ms(intraday, true), "2024-01-02 14:30");
+        assert_eq!(from_epoch_ms(intraday, false), "2024-01-02");
     }
 
     #[test]

@@ -1940,6 +1940,7 @@ dependencies = [
  "comfy-table",
  "directories",
  "encoding_rs",
+ "flate2",
  "reqwest 0.12.28",
  "rhai",
  "rusqlite",

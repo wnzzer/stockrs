@@ -176,6 +176,18 @@ impl Period {
         }
     }
 
+    /// 雪球 kline 接口的 period 参数。
+    pub fn xueqiu_period(&self) -> &'static str {
+        match self {
+            Period::Day => "day",
+            Period::Min1 => "1m",
+            Period::Min5 => "5m",
+            Period::Min15 => "15m",
+            Period::Min30 => "30m",
+            Period::Min60 => "60m",
+        }
+    }
+
     /// 一年的 bar 数,用于年化(收益/夏普/Alpha)。A股每交易日约 240 分钟,
     /// 按 252 交易日折算;分钟线年化本身是近似,常数取整已足够。
     pub fn bars_per_year(&self) -> f64 {

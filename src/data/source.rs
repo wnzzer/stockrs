@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 use super::models::{KLine, Market, Period, Quote};
-use super::{eastmoney::Eastmoney, sina::Sina, tencent::Tencent};
+use super::{eastmoney::Eastmoney, sina::Sina, tencent::Tencent, xueqiu::Xueqiu};
 
 /// 带超时的共享 HTTP 客户端。超时是故障切换能生效的前提：
 /// 某个源卡住时必须尽快失败，才能切到下一个源。
@@ -49,13 +49,41 @@ pub trait KlineSource: Send + Sync {
     ) -> Result<(String, Vec<KLine>)>;
 }
 
-/// 故障切换顺序：东财（字段最全）→ 腾讯（前复权+区间）→ 新浪。
+/// 故障切换顺序：东财（字段最全）→ 腾讯（前复权+区间）→ 雪球 → 新浪。
+///
+/// 雪球排在腾讯**之后**：它的 quotec 不返回股票名称与 PE/PB，排到腾讯前面会在
+/// 东财失效时白丢这两样（腾讯 A股/港股都给）。放在新浪之前即可拿到"比新浪稳"
+/// 的冗余收益，又不牺牲字段完整度。
 fn quote_sources() -> Vec<Box<dyn QuoteSource>> {
-    vec![Box::new(Eastmoney), Box::new(Tencent), Box::new(Sina)]
+    vec![
+        Box::new(Eastmoney),
+        Box::new(Tencent),
+        Box::new(Xueqiu),
+        Box::new(Sina),
+    ]
 }
 
 fn kline_sources() -> Vec<Box<dyn KlineSource>> {
-    vec![Box::new(Eastmoney), Box::new(Tencent), Box::new(Sina)]
+    vec![
+        Box::new(Eastmoney),
+        Box::new(Tencent),
+        Box::new(Xueqiu),
+        Box::new(Sina),
+    ]
+}
+
+/// 可用行情源名字（`quote --source` 的取值，也用于报错提示）。
+pub const QUOTE_SOURCE_NAMES: &[&str] = &["eastmoney", "tencent", "xueqiu", "sina"];
+
+/// 按名字取单个行情源，供 `--source` 强制指定（不做故障切换）。
+fn quote_source_by_name(name: &str) -> Option<Box<dyn QuoteSource>> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "eastmoney" | "em" | "dongcai" => Some(Box::new(Eastmoney)),
+        "tencent" | "qq" => Some(Box::new(Tencent)),
+        "xueqiu" | "xq" => Some(Box::new(Xueqiu)),
+        "sina" | "sn" => Some(Box::new(Sina)),
+        _ => None,
+    }
 }
 
 /// 依次尝试各日K源，返回首个成功结果及其来源名。
@@ -82,20 +110,53 @@ pub async fn fetch_klines(
 pub async fn fetch_quotes(
     reqs: &[(String, Market)],
 ) -> Result<(Vec<(Quote, &'static str)>, Vec<String>)> {
+    fetch_quotes_with(quote_sources(), reqs).await
+}
+
+/// 只用指定的一个源取批量行情（`quote --source`）：不做故障切换，
+/// 失败时把该源的真实错误抛出来——强制指定了源就不该再把错误咽掉。
+pub async fn fetch_quotes_from(
+    name: &str,
+    reqs: &[(String, Market)],
+) -> Result<(Vec<(Quote, &'static str)>, Vec<String>)> {
+    let src = quote_source_by_name(name).ok_or_else(|| {
+        anyhow!(
+            "未知行情源 {}，可选：{}",
+            name,
+            QUOTE_SOURCE_NAMES.join(" / ")
+        )
+    })?;
+    fetch_quotes_with(vec![src], reqs).await
+}
+
+async fn fetch_quotes_with(
+    sources: Vec<Box<dyn QuoteSource>>,
+    reqs: &[(String, Market)],
+) -> Result<(Vec<(Quote, &'static str)>, Vec<String>)> {
     let mut found: std::collections::HashMap<String, (Quote, &'static str)> =
         std::collections::HashMap::new();
     let mut remaining: Vec<(String, Market)> = reqs.to_vec();
+    let mut errs = Vec::new();
 
-    for src in quote_sources() {
+    for src in sources {
         if remaining.is_empty() {
             break;
         }
-        if let Ok(quotes) = src.quotes(&remaining).await {
-            for q in quotes {
-                found.entry(q.code.clone()).or_insert((q, src.name()));
+        match src.quotes(&remaining).await {
+            Ok(quotes) => {
+                for q in quotes {
+                    found.entry(q.code.clone()).or_insert((q, src.name()));
+                }
+                remaining.retain(|(c, _)| !found.contains_key(c));
             }
-            remaining.retain(|(c, _)| !found.contains_key(c));
+            Err(e) => errs.push(format!("  [{}] {}", src.name(), e)),
         }
+    }
+
+    // 一条都没拿到且各源都报了错:把原因抛出去,否则调用方只会看到
+    // "所有数据源均无数据",真正的原因(限流/需要 token/网络)全被咽掉。
+    if found.is_empty() && !errs.is_empty() {
+        return Err(anyhow!("所有行情源均失败：\n{}", errs.join("\n")));
     }
 
     let ordered = reqs
