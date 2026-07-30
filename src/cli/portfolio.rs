@@ -163,6 +163,14 @@ async fn quote_map(codes: &[String]) -> HashMap<String, Quote> {
     out
 }
 
+/// 今日盈亏/今日%的基准价:当日建仓用买入价,历史持仓用昨收。
+/// 基准无效(≤0,如源未给出昨收)时返回 None——该持仓整条排除在今日口径外,
+/// 保证今日盈亏与其分母(基准市值)始终同源。
+fn today_basis(new_lot: bool, buy_price: f64, prev_close: f64) -> Option<f64> {
+    let basis = if new_lot { buy_price } else { prev_close };
+    (basis > 0.0).then_some(basis)
+}
+
 fn print_realized(store: &Store, code: Option<&str>) -> Result<()> {
     let realized = store.realized_pnl(code)?;
     if realized != 0.0 {
@@ -188,10 +196,12 @@ async fn dashboard(store: &Store) -> Result<()> {
         "代码", "数量", "现价", "今日%", "今日盈亏", "市值", "浮动盈亏", "浮动%",
     ]);
 
+    let today_str = today();
     let mut total_cost = 0.0;
     let mut total_value = 0.0;
     let mut today_pnl = 0.0;
-    let mut prev_value = 0.0; // 昨收市值,用于今日涨跌%
+    let mut prev_value = 0.0; // 今日基准市值,用于今日涨跌%
+    let mut has_new_lot = false;
     for p in &positions {
         let q = quotes.get(&p.code);
         let cur = q.map(|q| q.price).unwrap_or(p.price);
@@ -200,27 +210,44 @@ async fn dashboard(store: &Store) -> Result<()> {
         let value = cur * qf;
         let pnl = value - cost;
         let pnl_pct = if cost != 0.0 { pnl / cost } else { 0.0 };
-        // 今日盈亏 = 每股涨跌额 × 持股。今日口径只累计有实时行情的持仓——无行情者
-        // 既不计入今日盈亏,也不计入昨收市值(分母),否则会用买入价冒充昨收稀释今日%。
-        let today_pos = q.map(|q| q.change * qf);
+        // 今日基准价:历史持仓用昨收。当日建仓的批次昨天并不在场,昨收→买入价这段
+        // 涨跌用户没经历过,基准必须换成买入价,否则虚增当日盈亏(#2)。
+        // 误录成未来日期时同样按建仓当日处理(昨收基准对它更没有意义)。
+        let new_lot = p.date.as_str() >= today_str.as_str();
+        has_new_lot |= new_lot;
+        // 今日口径只累计有实时行情、且基准价有效的持仓——否则既不计入今日盈亏,
+        // 也不计入基准市值(分母),避免用买入价冒充昨收稀释今日%。
+        let basis = q.and_then(|q| today_basis(new_lot, p.price, q.prev_close));
+        let today_pos = basis.map(|b| (cur - b) * qf);
         total_cost += cost;
         total_value += value;
-        if let Some(q) = q {
-            today_pnl += q.change * qf;
-            prev_value += q.prev_close * qf;
+        if let (Some(b), Some(diff)) = (basis, today_pos) {
+            today_pnl += diff;
+            prev_value += b * qf;
         }
         table.add_row(vec![
             p.code.clone(),
             p.quantity.to_string(),
             format!("{:.3}", cur),
             q.map_or("--".into(), |q| format!("{:+.2}%", q.change_pct * 100.0)),
-            today_pos.map_or("--".into(), money),
+            today_pos.map_or("--".into(), |v| {
+                // 今日建仓打星号:该行"今日%"是个股当日涨跌,盈亏却自买入价起算,
+                // 不加标记会显得两列自相矛盾。
+                if new_lot {
+                    format!("{}*", money(v))
+                } else {
+                    money(v)
+                }
+            }),
             money(value),
             money(pnl),
             format!("{:+.2}%", pnl_pct * 100.0),
         ]);
     }
     println!("{table}");
+    if has_new_lot {
+        println!("* 今日建仓,今日盈亏自买入价起算(非昨收)");
+    }
     println!("{}", "─".repeat(52));
 
     let total_pnl = total_value - total_cost;
@@ -500,4 +527,53 @@ async fn stats_one(
         println!("本股已实现盈亏 ¥{}", money(realized));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 今日盈亏 = (现价 - 基准价) × 持股,与 dashboard 内的算式同构。
+    fn today_pnl(new_lot: bool, buy: f64, prev_close: f64, cur: f64, qty: i64) -> Option<f64> {
+        today_basis(new_lot, buy, prev_close).map(|b| (cur - b) * qty as f64)
+    }
+
+    #[test]
+    fn new_lot_uses_buy_price_not_prev_close() {
+        // issue #2 场景:昨收 1.61,今日大跌,用户当日 1.546 建仓,收盘 1.545。
+        let (buy, prev_close, cur, qty) = (1.546, 1.61, 1.545, 3200);
+
+        // 当日建仓:只亏买入价到现价这一小段。
+        let new = today_pnl(true, buy, prev_close, cur, qty).unwrap();
+        assert!((new - (-3.2)).abs() < 1e-9, "当日建仓应为 -3.2,实得 {new}");
+
+        // 历史持仓:仍按昨收基准(-0.065/股 × 3200)。
+        let held = today_pnl(false, buy, prev_close, cur, qty).unwrap();
+        assert!(
+            (held - (-208.0)).abs() < 1e-9,
+            "历史持仓应为 -208,实得 {held}"
+        );
+
+        // 修复的意义:昨收基准把用户没经历过的 1.61→1.546 也算成了当日亏损。
+        assert!(new > held);
+    }
+
+    #[test]
+    fn basis_switches_on_position_date() {
+        let today = today();
+        // 误录未来日期时也按当日建仓处理:昨收基准对它更无意义。
+        let future = "9999-12-31";
+        assert!(future >= today.as_str());
+        assert_eq!(today_basis(true, 10.0, 9.0), Some(10.0));
+        assert_eq!(today_basis(false, 10.0, 9.0), Some(9.0));
+    }
+
+    #[test]
+    fn invalid_basis_excluded_from_today() {
+        // 源未给出昨收(0)的历史持仓:整条排除,不能拿 0 当基准把现价全算成当日盈利。
+        assert_eq!(today_basis(false, 10.0, 0.0), None);
+        assert_eq!(today_pnl(false, 10.0, 0.0, 11.0, 100), None);
+        // 当日建仓但买入价非法(0)同样排除。
+        assert_eq!(today_basis(true, 0.0, 9.0), None);
+    }
 }
