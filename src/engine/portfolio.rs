@@ -892,7 +892,13 @@ mod tests {
             "B",
             &[("d1", 20.0, 20.0), ("d2", 20.0, 20.0), ("d3", 20.0, 20.0)],
         );
-        let ctx = PortfolioCtx::new(vec![a, b], 100_000.0, HashMap::new(), FeeModel::a_share(), Period::Day);
+        let ctx = PortfolioCtx::new(
+            vec![a, b],
+            100_000.0,
+            HashMap::new(),
+            FeeModel::a_share(),
+            Period::Day,
+        );
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {
@@ -953,7 +959,13 @@ mod tests {
             "A",
             &[("d1", 10.0, 10.0), ("d2", 10.0, 10.0), ("d3", 10.0, 10.0)],
         );
-        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::a_share(), Period::Day);
+        let ctx = PortfolioCtx::new(
+            vec![a],
+            100_000.0,
+            HashMap::new(),
+            FeeModel::a_share(),
+            Period::Day,
+        );
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {
@@ -979,7 +991,13 @@ mod tests {
             &[("d1", 10.0, 10.0), ("d2", 10.0, 10.0), ("d3", 10.0, 10.0)],
         );
         a.lot = 500;
-        let ctx = PortfolioCtx::new(vec![a], 100_000.0, HashMap::new(), FeeModel::hk(), Period::Day);
+        let ctx = PortfolioCtx::new(
+            vec![a],
+            100_000.0,
+            HashMap::new(),
+            FeeModel::hk(),
+            Period::Day,
+        );
         let c = ctx.clone();
         let mut bar = 0;
         let res = run(&ctx, move || {

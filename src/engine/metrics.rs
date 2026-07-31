@@ -91,12 +91,7 @@ pub struct Metrics {
     pub total_trades: usize,
 }
 
-pub fn compute(
-    initial: f64,
-    equity: &[f64],
-    trades: &[TradeRec],
-    bars_per_year: f64,
-) -> Metrics {
+pub fn compute(initial: f64, equity: &[f64], trades: &[TradeRec], bars_per_year: f64) -> Metrics {
     let final_value = equity.last().copied().unwrap_or(initial);
     let total_return = if initial != 0.0 {
         final_value / initial - 1.0

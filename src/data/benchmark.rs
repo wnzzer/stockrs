@@ -99,7 +99,9 @@ pub async fn fetch(
     match Eastmoney.klines(code, market, Period::Day, &beg, &e).await {
         Ok((_, ks)) if !ks.is_empty() => {
             let _ = store.upsert_klines(&ks, Period::Day);
-            let filtered = store.get_klines(code, Period::Day, start, end).unwrap_or(ks);
+            let filtered = store
+                .get_klines(code, Period::Day, start, end)
+                .unwrap_or(ks);
             Some((code.to_string(), name.to_string(), filtered))
         }
         _ => None,
