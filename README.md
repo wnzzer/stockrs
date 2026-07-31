@@ -52,6 +52,7 @@ stockrs portfolio add 000858 --price 120 --quantity 500
 stockrs portfolio sell 000858 --price 135 --quantity 200   # 减仓,记录已实现盈亏
 stockrs portfolio cash 5163                                 # 设置现金(计入总资产)
 stockrs portfolio list                                     # 仪表盘:今日/累计/已实现/总资产
+stockrs portfolio list --cost-mode diluted                 # 摊薄成本口径(已实现折入成本,对齐东财)
 stockrs portfolio stats --all                              # 全部持仓收益分析 + 基准对比
 ```
 
@@ -71,7 +72,7 @@ stockrs portfolio stats --all                              # 全部持仓收益�
 | `backtest <script> ... --param k=v1,v2 [--optimize sharpe]` | 参数扫描（网格寻优） |
 | `strategy new <file>` | 生成带完整 ctx API 注释的策略模板（脚手架） |
 | `portfolio add/remove/history` | 持仓管理（`remove` 仅纠正误录，不记账） |
-| `portfolio list` | 账户仪表盘：持仓 + 今日涨跌/今日盈亏 + 今日/累计/已实现/总资产一屏汇总 |
+| `portfolio list [--cost-mode buy\|diluted]` | 账户仪表盘：持仓（按代码聚合）+ 今日涨跌/今日盈亏 + 每股已实现/总盈亏 + 已清仓品种 + 今日/累计/已实现/总资产一屏汇总。`--cost-mode diluted` 切摊薄成本口径（已实现折入成本，对齐东财） |
 | `portfolio sell <code> --price --quantity [--date --note]` | 卖出/减仓，记录已实现盈亏（多批建仓按先进先出 FIFO 计成本） |
 | `portfolio cash [金额]` | 设置/查看现金余额（手动维护，计入仪表盘总资产） |
 | `portfolio stats [code] [--all] [--benchmark hs300]` | 持仓收益分析（曲线/回撤/日均/基准对比）；省略代码或 `--all` 分析全部 |

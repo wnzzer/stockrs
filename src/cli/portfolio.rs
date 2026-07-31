@@ -1,6 +1,6 @@
 use crate::utils::date::{days_since, today};
 use anyhow::{anyhow, Result};
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use comfy_table::Table;
 use std::collections::HashMap;
 
@@ -11,6 +11,18 @@ use crate::utils::format::{money, sparkline};
 
 /// 交易日数少于此值时,极值/回撤/曲线样本太短、意义不大,略去(见持仓分析)。
 const MIN_DAYS_FOR_CURVE: usize = 6;
+
+/// 仪表盘"已清仓"区块最多列出的品种数,超出只提示总数(全部见 portfolio history)。
+const MAX_CLOSED_ROWS: usize = 8;
+
+/// 持仓盈亏的成本口径。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CostMode {
+    /// 买入成本:盈亏只看在场持仓,已实现盈亏单列(默认)
+    Buy,
+    /// 摊薄成本:已实现盈亏折入成本,盈亏一列即该股总盈亏(对齐东财)
+    Diluted,
+}
 
 #[derive(Subcommand)]
 pub enum PortfolioCmd {
@@ -41,7 +53,11 @@ pub enum PortfolioCmd {
     /// 移除持仓(不记录卖出,仅纠正误录)
     Remove { code: String },
     /// 账户仪表盘:持仓 + 今日涨跌/今日盈亏 + 今日/累计/已实现/总资产汇总
-    List,
+    List {
+        /// 成本口径:buy=买入成本(默认,已实现单列);diluted=摊薄成本(已实现折入成本,对齐东财)
+        #[arg(long, value_enum, default_value_t = CostMode::Buy)]
+        cost_mode: CostMode,
+    },
     /// 历史交易记录
     History,
     /// 持仓收益分析(收益曲线、回撤、日均收益、基准对比);省略代码或 --all 分析全部持仓
@@ -111,7 +127,7 @@ pub async fn run(cmd: PortfolioCmd) -> Result<()> {
             }
             Ok(())
         }
-        PortfolioCmd::List => dashboard(&store).await,
+        PortfolioCmd::List { cost_mode } => dashboard(&store, cost_mode).await,
         PortfolioCmd::History => history(&store),
         PortfolioCmd::Stats {
             code,
@@ -179,74 +195,154 @@ fn print_realized(store: &Store, code: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-async fn dashboard(store: &Store) -> Result<()> {
+/// 仪表盘按代码聚合后的一行:多批建仓合并成一行(成本/市值求和),
+/// 今日口径仍逐批算(基准价按批次的建仓日决定)再累加,与汇总同源。
+struct DashRow {
+    code: String,
+    qty: i64,
+    cost: f64,
+    value: f64,
+    cur: f64,
+    change_pct: Option<f64>,
+    /// 今日盈亏;None = 该股所有批次都无有效基准,整体排除在今日口径外。
+    today_pnl: Option<f64>,
+    /// 今日盈亏对应的基准市值(分母),只累计基准有效的批次。
+    today_basis_value: f64,
+    /// 任一批次为今日建仓(用于星号标记)。
+    new_lot: bool,
+    realized: f64,
+}
+
+/// 按口径算盈亏与收益率。摊薄口径把已实现盈亏折入成本(对齐东财),盈亏一列因此
+/// 等于该股总盈亏;已实现吃掉全部在场成本时摊薄成本≤0,收益率失去意义,返回 None。
+fn mode_pnl(mode: CostMode, cost: f64, value: f64, realized: f64) -> (f64, Option<f64>) {
+    let base = match mode {
+        CostMode::Buy => cost,
+        CostMode::Diluted => cost - realized,
+    };
+    let pnl = value - base;
+    (pnl, (base > 0.0).then(|| pnl / base))
+}
+
+async fn dashboard(store: &Store, cost_mode: CostMode) -> Result<()> {
     let positions = store.list_positions()?;
     if positions.is_empty() {
         println!("当前无持仓");
         if let Some(cash) = store.get_cash()? {
             println!("现金 ¥{}  总资产 ¥{}", money(cash), money(cash));
         }
+        // 无在场持仓不代表没赚过:已清仓品种的收益只能从账本找回。
+        print_closed(store, None)?;
         return Ok(());
     }
     let codes: Vec<String> = positions.iter().map(|p| p.code.clone()).collect();
     let quotes = quote_map(&codes).await;
+    let realized_map = store.realized_by_code()?;
+
+    // 按代码聚合(保持首次出现顺序):同一代码多批建仓合并为一行,否则"已实现"
+    // 这类按代码统计的列无法归属到某个批次。
+    let today_str = today();
+    let mut order: Vec<String> = Vec::new();
+    let mut rows: HashMap<String, DashRow> = HashMap::new();
+    for p in &positions {
+        let q = quotes.get(&p.code);
+        let cur = q.map(|q| q.price).unwrap_or(p.price);
+        let qf = p.quantity as f64;
+        // 今日基准价:历史持仓用昨收。当日建仓的批次昨天并不在场,昨收→买入价这段
+        // 涨跌用户没经历过,基准必须换成买入价,否则虚增当日盈亏(#2)。
+        // 误录成未来日期时同样按建仓当日处理(昨收基准对它更没有意义)。
+        let new_lot = p.date.as_str() >= today_str.as_str();
+        // 今日口径只累计有实时行情、且基准价有效的批次——否则既不计入今日盈亏,
+        // 也不计入基准市值(分母),避免用买入价冒充昨收稀释今日%。
+        let basis = q.and_then(|q| today_basis(new_lot, p.price, q.prev_close));
+        let row = rows.entry(p.code.clone()).or_insert_with(|| {
+            order.push(p.code.clone());
+            DashRow {
+                code: p.code.clone(),
+                qty: 0,
+                cost: 0.0,
+                value: 0.0,
+                cur,
+                change_pct: q.map(|q| q.change_pct),
+                today_pnl: None,
+                today_basis_value: 0.0,
+                new_lot: false,
+                realized: realized_map.get(&p.code).copied().unwrap_or(0.0),
+            }
+        });
+        row.qty += p.quantity;
+        row.cost += p.price * qf;
+        row.value += cur * qf;
+        row.new_lot |= new_lot;
+        if let Some(b) = basis {
+            row.today_pnl = Some(row.today_pnl.unwrap_or(0.0) + (cur - b) * qf);
+            row.today_basis_value += b * qf;
+        }
+    }
+    let rows: Vec<&DashRow> = order.iter().filter_map(|c| rows.get(c)).collect();
+
+    let diluted = cost_mode == CostMode::Diluted;
+    // 摊薄口径下"已实现"已折进盈亏列,再单列就是重复计数,故只在买入口径下加列;
+    // 且全无卖出记录时不加,避免平白拉宽表格。
+    let show_realized = !diluted && rows.iter().any(|r| r.realized != 0.0);
 
     let mut table = Table::new();
-    table.set_header(vec![
-        "代码", "数量", "现价", "今日%", "今日盈亏", "市值", "浮动盈亏", "浮动%",
-    ]);
+    let mut header = vec!["代码", "数量", "现价", "今日%", "今日盈亏", "市值"];
+    header.extend(if diluted {
+        ["总盈亏", "总%"]
+    } else {
+        ["浮动盈亏", "浮动%"]
+    });
+    if show_realized {
+        header.extend(["已实现", "总盈亏"]);
+    }
+    table.set_header(header);
 
-    let today_str = today();
     let mut total_cost = 0.0;
     let mut total_value = 0.0;
     let mut today_pnl = 0.0;
     let mut prev_value = 0.0; // 今日基准市值,用于今日涨跌%
     let mut has_new_lot = false;
-    for p in &positions {
-        let q = quotes.get(&p.code);
-        let cur = q.map(|q| q.price).unwrap_or(p.price);
-        let qf = p.quantity as f64;
-        let cost = p.price * qf;
-        let value = cur * qf;
-        let pnl = value - cost;
-        let pnl_pct = if cost != 0.0 { pnl / cost } else { 0.0 };
-        // 今日基准价:历史持仓用昨收。当日建仓的批次昨天并不在场,昨收→买入价这段
-        // 涨跌用户没经历过,基准必须换成买入价,否则虚增当日盈亏(#2)。
-        // 误录成未来日期时同样按建仓当日处理(昨收基准对它更没有意义)。
-        let new_lot = p.date.as_str() >= today_str.as_str();
-        has_new_lot |= new_lot;
-        // 今日口径只累计有实时行情、且基准价有效的持仓——否则既不计入今日盈亏,
-        // 也不计入基准市值(分母),避免用买入价冒充昨收稀释今日%。
-        let basis = q.and_then(|q| today_basis(new_lot, p.price, q.prev_close));
-        let today_pos = basis.map(|b| (cur - b) * qf);
-        total_cost += cost;
-        total_value += value;
-        if let (Some(b), Some(diff)) = (basis, today_pos) {
+    for r in &rows {
+        total_cost += r.cost;
+        total_value += r.value;
+        has_new_lot |= r.new_lot;
+        if let Some(diff) = r.today_pnl {
             today_pnl += diff;
-            prev_value += b * qf;
+            prev_value += r.today_basis_value;
         }
-        table.add_row(vec![
-            p.code.clone(),
-            p.quantity.to_string(),
-            format!("{:.3}", cur),
-            q.map_or("--".into(), |q| format!("{:+.2}%", q.change_pct * 100.0)),
-            today_pos.map_or("--".into(), |v| {
+        let (pnl, pnl_pct) = mode_pnl(cost_mode, r.cost, r.value, r.realized);
+        let mut cells = vec![
+            r.code.clone(),
+            r.qty.to_string(),
+            format!("{:.3}", r.cur),
+            r.change_pct
+                .map_or("--".into(), |c| format!("{:+.2}%", c * 100.0)),
+            r.today_pnl.map_or("--".into(), |v| {
                 // 今日建仓打星号:该行"今日%"是个股当日涨跌,盈亏却自买入价起算,
                 // 不加标记会显得两列自相矛盾。
-                if new_lot {
+                if r.new_lot {
                     format!("{}*", money(v))
                 } else {
                     money(v)
                 }
             }),
-            money(value),
+            money(r.value),
             money(pnl),
-            format!("{:+.2}%", pnl_pct * 100.0),
-        ]);
+            pnl_pct.map_or("--".into(), |p| format!("{:+.2}%", p * 100.0)),
+        ];
+        if show_realized {
+            cells.push(money(r.realized));
+            cells.push(money(r.value - r.cost + r.realized));
+        }
+        table.add_row(cells);
     }
     println!("{table}");
     if has_new_lot {
         println!("* 今日建仓,今日盈亏自买入价起算(非昨收)");
+    }
+    if diluted {
+        println!("摊薄口径:已实现盈亏已折入成本(对齐东财),成本≤0 时收益率显示 --");
     }
     println!("{}", "─".repeat(52));
 
@@ -261,6 +357,8 @@ async fn dashboard(store: &Store) -> Result<()> {
     } else {
         0.0
     };
+    // 汇总行两个口径一致:始终报纯浮动 + 全账户已实现,不受 --cost-mode 影响,
+    // 避免同一屏里两处"总盈亏"含义不同。
     println!(
         "今日盈亏 ¥{} ({:+.2}%)   累计浮动 ¥{} ({:+.2}%)",
         money(today_pnl),
@@ -268,11 +366,16 @@ async fn dashboard(store: &Store) -> Result<()> {
         money(total_pnl),
         total_pct * 100.0
     );
-    // 第二行:已实现 / 总市值 [/ 现金 / 总资产]
+    // 第二行:已实现 / 总盈亏 / 总市值 [/ 现金 / 总资产]
+    // 已实现取全账户(含已清仓品种),故总盈亏是账户级的、不等于表内各行相加。
     let realized = store.realized_pnl(None)?;
     let mut line = String::new();
     if realized != 0.0 {
-        line.push_str(&format!("已实现 ¥{}   ", money(realized)));
+        line.push_str(&format!(
+            "已实现 ¥{}   总盈亏 ¥{}   ",
+            money(realized),
+            money(total_pnl + realized)
+        ));
     }
     line.push_str(&format!("总市值 ¥{}", money(total_value)));
     if let Some(cash) = store.get_cash()? {
@@ -283,6 +386,52 @@ async fn dashboard(store: &Store) -> Result<()> {
         ));
     }
     println!("{line}");
+    print_closed(store, Some(MAX_CLOSED_ROWS))?;
+    Ok(())
+}
+
+/// 已清仓品种区块:这些票已从持仓表消失,收益不在这里就彻底看不到了。
+/// limit=Some(n) 只列最近 n 只并提示总数,None 全列。无已清仓品种时静默跳过。
+fn print_closed(store: &Store, limit: Option<usize>) -> Result<()> {
+    let closed = store.closed_positions()?;
+    if closed.is_empty() {
+        return Ok(());
+    }
+    let total: f64 = closed.iter().map(|c| c.realized_pnl).sum();
+    println!("\n已清仓 {} 只  已实现合计 ¥{}", closed.len(), money(total));
+    let shown = limit.unwrap_or(closed.len());
+    let mut table = Table::new();
+    table.set_header(vec![
+        "代码",
+        "卖出量",
+        "成本",
+        "已实现",
+        "收益%",
+        "最后卖出",
+    ]);
+    for c in closed.iter().take(shown) {
+        table.add_row(vec![
+            c.code.clone(),
+            c.sold_qty.to_string(),
+            money(c.cost),
+            money(c.realized_pnl),
+            // 分母是各笔卖出的 FIFO 结算成本合计,与 sell 当时报的收益率同口径。
+            if c.cost > 0.0 {
+                format!("{:+.2}%", c.realized_pnl / c.cost * 100.0)
+            } else {
+                "--".into()
+            },
+            c.last_date.clone(),
+        ]);
+    }
+    println!("{table}");
+    if closed.len() > shown {
+        println!(
+            "(仅列最近 {} 只,共 {} 只;全部见 portfolio history)",
+            shown,
+            closed.len()
+        );
+    }
     Ok(())
 }
 
@@ -324,6 +473,7 @@ fn history(store: &Store) -> Result<()> {
     }
     println!("{table}");
     print_realized(store, None)?;
+    print_closed(store, None)?;
     Ok(())
 }
 
@@ -441,7 +591,9 @@ async fn stats_one(
         ),
         None => println!(
             "现价 ¥{:.3}（本地日K {} 收盘,无实时价）   市值 ¥{}",
-            cur, last_date, money(cur_value)
+            cur,
+            last_date,
+            money(cur_value)
         ),
     }
     // 数据滞后陷阱:本地日K明显落后(>5 自然日,跳过周末/短假的假警报)时提醒更新。
@@ -556,6 +708,48 @@ mod tests {
 
         // 修复的意义:昨收基准把用户没经历过的 1.61→1.546 也算成了当日亏损。
         assert!(new > held);
+    }
+
+    #[test]
+    fn diluted_folds_realized_into_cost() {
+        // 成本 10000、市值 9000(浮亏 1000)、已做T赚了 1500。
+        let (cost, value, realized) = (10_000.0, 9_000.0, 1_500.0);
+
+        // 买入口径:浮亏就是浮亏,已实现另算。
+        let (pnl, pct) = mode_pnl(CostMode::Buy, cost, value, realized);
+        assert!((pnl + 1000.0).abs() < 1e-9);
+        assert!((pct.unwrap() + 0.1).abs() < 1e-9);
+
+        // 摊薄口径:成本降到 8500,盈亏变成该股总盈亏 500 = -1000 + 1500。
+        let (pnl_d, pct_d) = mode_pnl(CostMode::Diluted, cost, value, realized);
+        assert!((pnl_d - 500.0).abs() < 1e-9);
+        assert!((pnl_d - (pnl + realized)).abs() < 1e-9);
+        assert!((pct_d.unwrap() - 500.0 / 8500.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn diluted_pct_none_when_cost_eaten_up() {
+        // 已实现盈亏超过在场成本 → 摊薄成本 ≤0,收益率没有意义(东财此时也不给数)。
+        let (pnl, pct) = mode_pnl(CostMode::Diluted, 1_000.0, 1_200.0, 1_000.0);
+        assert!((pnl - 1200.0).abs() < 1e-9); // 盈亏本身仍成立:总共赚了 1200
+        assert_eq!(pct, None);
+        assert_eq!(
+            mode_pnl(CostMode::Diluted, 1_000.0, 1_200.0, 1_500.0).1,
+            None
+        );
+        // 零成本持仓(误录)在两种口径下都不给收益率,不做除零。
+        assert_eq!(mode_pnl(CostMode::Buy, 0.0, 100.0, 0.0).1, None);
+    }
+
+    #[test]
+    fn no_sells_means_modes_agree() {
+        // 从没卖过时两种口径必须完全一致,否则默认切换会平白改变老用户看到的数字。
+        for (cost, value) in [(1000.0, 1200.0), (5000.0, 3000.0)] {
+            assert_eq!(
+                mode_pnl(CostMode::Buy, cost, value, 0.0),
+                mode_pnl(CostMode::Diluted, cost, value, 0.0)
+            );
+        }
     }
 
     #[test]

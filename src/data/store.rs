@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::models::{normalize_code, Fundamental, KLine, Market, Period, Position, Stock, Trade};
@@ -250,8 +251,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare("SELECT MAX(date) FROM klines WHERE code = ?1 AND klt = ?2")?;
-        let date: Option<String> =
-            stmt.query_row(params![code, period.tag()], |row| row.get(0))?;
+        let date: Option<String> = stmt.query_row(params![code, period.tag()], |row| row.get(0))?;
         Ok(date)
     }
 
@@ -264,11 +264,11 @@ impl Store {
     }
 
     pub fn kline_date_range(&self, code: &str, period: Period) -> Result<Option<(String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT MIN(date), MAX(date) FROM klines WHERE code = ?1 AND klt = ?2",
-        )?;
-        let range: (Option<String>, Option<String>) =
-            stmt.query_row(params![code, period.tag()], |row| {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT MIN(date), MAX(date) FROM klines WHERE code = ?1 AND klt = ?2")?;
+        let range: (Option<String>, Option<String>) = stmt
+            .query_row(params![code, period.tag()], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })?;
         match range {
@@ -414,7 +414,11 @@ impl Store {
                 "SELECT id, price, quantity FROM portfolio WHERE code = ?1 ORDER BY date ASC, id ASC",
             )?;
             let rows = stmt.query_map(params![code], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, i64>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
             })?;
             let mut v = Vec::new();
             for r in rows {
@@ -427,11 +431,7 @@ impl Store {
             return Err(anyhow!("{} 无持仓", code));
         }
         if quantity > total_qty {
-            return Err(anyhow!(
-                "卖出 {} 股超过持仓 {} 股",
-                quantity,
-                total_qty
-            ));
+            return Err(anyhow!("卖出 {} 股超过持仓 {} 股", quantity, total_qty));
         }
         // FIFO 削减:按建仓先后消耗批次,并累计被卖股份的原始成本(成本口径 = 削减口径,保证守恒)。
         // 整批卖光则删除,部分卖出则更新剩余数量。
@@ -520,6 +520,51 @@ impl Store {
         Ok(sum)
     }
 
+    /// 按代码分组的已实现盈亏。仪表盘一次取全表,避免每只持仓查一次库。
+    pub fn realized_by_code(&self) -> Result<HashMap<String, f64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT code, COALESCE(SUM(pnl),0) FROM trades WHERE action='sell' GROUP BY code",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (code, pnl) = r?;
+            out.insert(code, pnl);
+        }
+        Ok(out)
+    }
+
+    /// 已清仓品种:有卖出记录但当前无在场批次。持仓表看不到它们,收益只能从这里找回。
+    /// 成本取各笔卖出的 FIFO 结算成本之和,故收益率 = 已实现 / 该成本,口径与 sell 一致。
+    /// 按最后卖出日倒序。
+    pub fn closed_positions(&self) -> Result<Vec<ClosedPosition>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT code,
+                    COALESCE(SUM(pnl),0),
+                    COALESCE(SUM(cost_basis * quantity),0),
+                    COALESCE(SUM(quantity),0),
+                    MAX(date)
+             FROM trades
+             WHERE action='sell' AND code NOT IN (SELECT code FROM portfolio)
+             GROUP BY code
+             ORDER BY MAX(date) DESC, code",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ClosedPosition {
+                code: r.get(0)?,
+                realized_pnl: r.get(1)?,
+                cost: r.get(2)?,
+                sold_qty: r.get(3)?,
+                last_date: r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     pub fn list_positions(&self) -> Result<Vec<Position>> {
         let mut stmt = self
             .conn
@@ -565,6 +610,17 @@ impl Store {
         }
         Ok(out)
     }
+}
+
+/// 已清仓品种的账本汇总(见 `closed_positions`)。
+#[derive(Debug, Clone)]
+pub struct ClosedPosition {
+    pub code: String,
+    pub realized_pnl: f64,
+    /// 各笔卖出的 FIFO 结算成本合计,作为收益率分母。
+    pub cost: f64,
+    pub sold_qty: i64,
+    pub last_date: String,
 }
 
 /// `sell_position` 的结算结果:结算成本、已实现盈亏、卖出量与剩余持仓。
@@ -636,9 +692,12 @@ mod tests {
     #[test]
     fn sell_partial_then_full() {
         let mut s = mem_store();
-        s.add_position("600000", 10.0, 100, "2024-01-01", None).unwrap();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
 
-        let o = s.sell_position("600000", 12.0, 40, "2024-02-01", None).unwrap();
+        let o = s
+            .sell_position("600000", 12.0, 40, "2024-02-01", None)
+            .unwrap();
         assert!((o.avg_cost - 10.0).abs() < 1e-9);
         assert!((o.realized_pnl - 80.0).abs() < 1e-9); // (12-10)*40
         assert_eq!(o.sold_qty, 40);
@@ -647,7 +706,9 @@ mod tests {
         assert!((s.realized_pnl(Some("600000")).unwrap() - 80.0).abs() < 1e-9);
 
         // 卖光剩余,持仓清空,累计已实现盈亏 = 80 + 120。
-        let o2 = s.sell_position("600000", 12.0, 60, "2024-03-01", None).unwrap();
+        let o2 = s
+            .sell_position("600000", 12.0, 60, "2024-03-01", None)
+            .unwrap();
         assert!((o2.realized_pnl - 120.0).abs() < 1e-9);
         assert_eq!(o2.remaining_qty, 0);
         assert_eq!(held_qty(&s, "600000"), 0);
@@ -655,13 +716,87 @@ mod tests {
     }
 
     #[test]
+    fn realized_by_code_groups_all_sells() {
+        let mut s = mem_store();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.add_position("000001", 20.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.sell_position("600000", 12.0, 100, "2024-02-01", None)
+            .unwrap(); // +200,清仓
+        s.sell_position("000001", 19.0, 50, "2024-02-01", None)
+            .unwrap(); // -50,仍持有
+        let m = s.realized_by_code().unwrap();
+        assert!((m["600000"] - 200.0).abs() < 1e-9);
+        assert!((m["000001"] + 50.0).abs() < 1e-9);
+        // 未卖出过的代码不出现(调用方按缺省 0 处理)。
+        assert!(!m.contains_key("300001"));
+        // 与逐只查询一致。
+        assert!((m["600000"] - s.realized_pnl(Some("600000")).unwrap()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn closed_positions_excludes_still_held() {
+        let mut s = mem_store();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.add_position("000001", 20.0, 100, "2024-01-01", None)
+            .unwrap();
+        // 600000 清仓;000001 只减仓一半,仍在持仓表里。
+        s.sell_position("600000", 12.0, 100, "2024-03-05", None)
+            .unwrap();
+        s.sell_position("000001", 19.0, 50, "2024-03-06", None)
+            .unwrap();
+
+        let closed = s.closed_positions().unwrap();
+        assert_eq!(closed.len(), 1, "部分卖出的 000001 不该算已清仓");
+        assert_eq!(closed[0].code, "600000");
+        assert_eq!(closed[0].sold_qty, 100);
+        assert!((closed[0].realized_pnl - 200.0).abs() < 1e-9);
+        assert!((closed[0].cost - 1000.0).abs() < 1e-9); // 收益率 = 200/1000 = +20%
+        assert_eq!(closed[0].last_date, "2024-03-05");
+
+        // 000001 卖光后加入,按最后卖出日倒序排在前面。
+        s.sell_position("000001", 21.0, 50, "2024-03-07", None)
+            .unwrap();
+        let closed = s.closed_positions().unwrap();
+        assert_eq!(closed.len(), 2);
+        assert_eq!(closed[0].code, "000001");
+        assert_eq!(closed[0].sold_qty, 100); // 两笔合计
+        assert!((closed[0].realized_pnl - 0.0).abs() < 1e-9); // -50 + 50
+        assert_eq!(closed[0].last_date, "2024-03-07");
+    }
+
+    #[test]
+    fn closed_position_reappears_on_rebuy() {
+        let mut s = mem_store();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.sell_position("600000", 12.0, 100, "2024-02-01", None)
+            .unwrap();
+        assert_eq!(s.closed_positions().unwrap().len(), 1);
+        // 重新建仓后回到持仓表,不再算已清仓——历史已实现仍在账上(realized_pnl)。
+        s.add_position("600000", 11.0, 100, "2024-04-01", None)
+            .unwrap();
+        assert!(s.closed_positions().unwrap().is_empty());
+        assert!((s.realized_pnl(Some("600000")).unwrap() - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn sell_over_holding_errors_and_leaves_state() {
         let mut s = mem_store();
-        s.add_position("600000", 10.0, 100, "2024-01-01", None).unwrap();
-        assert!(s.sell_position("600000", 12.0, 200, "2024-02-01", None).is_err());
-        assert!(s.sell_position("000001", 12.0, 100, "2024-02-01", None).is_err()); // 无持仓
-        assert!(s.sell_position("600000", 12.0, 0, "2024-02-01", None).is_err()); // 非正数
-        // 事务回滚:持仓与已实现盈亏均未变化。
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        assert!(s
+            .sell_position("600000", 12.0, 200, "2024-02-01", None)
+            .is_err());
+        assert!(s
+            .sell_position("000001", 12.0, 100, "2024-02-01", None)
+            .is_err()); // 无持仓
+        assert!(s
+            .sell_position("600000", 12.0, 0, "2024-02-01", None)
+            .is_err()); // 非正数
+                        // 事务回滚:持仓与已实现盈亏均未变化。
         assert_eq!(held_qty(&s, "600000"), 100);
         assert!((s.realized_pnl(None).unwrap()).abs() < 1e-9);
     }
@@ -669,10 +804,14 @@ mod tests {
     #[test]
     fn sell_fifo_cost_basis_across_lots() {
         let mut s = mem_store();
-        s.add_position("600000", 10.0, 100, "2024-01-01", None).unwrap(); // 先建仓
-        s.add_position("600000", 20.0, 100, "2024-01-02", None).unwrap(); // 后建仓
-        // FIFO:卖 150 消耗 100@10 + 50@20 → 成本 2000,均价 13.333,已实现 = 18*150 - 2000 = 700。
-        let o = s.sell_position("600000", 18.0, 150, "2024-02-01", None).unwrap();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap(); // 先建仓
+        s.add_position("600000", 20.0, 100, "2024-01-02", None)
+            .unwrap(); // 后建仓
+                       // FIFO:卖 150 消耗 100@10 + 50@20 → 成本 2000,均价 13.333,已实现 = 18*150 - 2000 = 700。
+        let o = s
+            .sell_position("600000", 18.0, 150, "2024-02-01", None)
+            .unwrap();
         assert!((o.avg_cost - 2000.0 / 150.0).abs() < 1e-9);
         assert!((o.realized_pnl - 700.0).abs() < 1e-9);
         assert_eq!(o.remaining_qty, 50);
@@ -692,13 +831,19 @@ mod tests {
     fn sell_multilot_closed_conserves_pnl() {
         // 守恒:多批建仓全部卖出后,累计已实现盈亏 = 总卖出额 − 总买入成本。
         let mut s = mem_store();
-        s.add_position("600000", 10.0, 100, "2024-01-01", None).unwrap();
-        s.add_position("600000", 20.0, 100, "2024-01-02", None).unwrap();
-        let o1 = s.sell_position("600000", 30.0, 100, "2024-02-01", None).unwrap();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.add_position("600000", 20.0, 100, "2024-01-02", None)
+            .unwrap();
+        let o1 = s
+            .sell_position("600000", 30.0, 100, "2024-02-01", None)
+            .unwrap();
         assert!((o1.realized_pnl - 2000.0).abs() < 1e-9); // 消耗 100@10:30*100 - 1000
-        let o2 = s.sell_position("600000", 30.0, 100, "2024-02-02", None).unwrap();
+        let o2 = s
+            .sell_position("600000", 30.0, 100, "2024-02-02", None)
+            .unwrap();
         assert!((o2.realized_pnl - 1000.0).abs() < 1e-9); // 消耗 100@20:30*100 - 2000
-        // 总卖出额 6000 − 总买入成本 3000 = 3000(旧的加权平均口径会错算成 2500)。
+                                                          // 总卖出额 6000 − 总买入成本 3000 = 3000(旧的加权平均口径会错算成 2500)。
         assert!((s.realized_pnl(None).unwrap() - 3000.0).abs() < 1e-9);
         assert_eq!(held_qty(&s, "600000"), 0);
     }
@@ -707,17 +852,25 @@ mod tests {
     fn remove_purges_buys_keeps_sells() {
         let mut s = mem_store();
         // 纯误录:add 后 remove,账本无残留。
-        s.add_position("000001", 5.0, 100, "2024-01-01", None).unwrap();
+        s.add_position("000001", 5.0, 100, "2024-01-01", None)
+            .unwrap();
         assert!(s.remove_position("000001").unwrap());
         assert!(s.list_trades().unwrap().iter().all(|t| t.code != "000001"));
         // 部分卖出后再 remove:买入记录清除,卖出记录(及已实现盈亏)保留。
-        s.add_position("600000", 10.0, 100, "2024-01-01", None).unwrap();
-        s.sell_position("600000", 12.0, 40, "2024-02-01", None).unwrap();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.sell_position("600000", 12.0, 40, "2024-02-01", None)
+            .unwrap();
         s.remove_position("600000").unwrap();
         let trades = s.list_trades().unwrap();
-        assert!(trades.iter().all(|t| !(t.code == "600000" && t.action == "buy")));
+        assert!(trades
+            .iter()
+            .all(|t| !(t.code == "600000" && t.action == "buy")));
         assert_eq!(
-            trades.iter().filter(|t| t.code == "600000" && t.action == "sell").count(),
+            trades
+                .iter()
+                .filter(|t| t.code == "600000" && t.action == "sell")
+                .count(),
             1
         );
         assert!((s.realized_pnl(Some("600000")).unwrap() - 80.0).abs() < 1e-9);
@@ -727,8 +880,10 @@ mod tests {
     #[test]
     fn sell_records_trade_with_pnl() {
         let mut s = mem_store();
-        s.add_position("600000", 10.0, 100, "2024-01-01", None).unwrap();
-        s.sell_position("600000", 12.0, 40, "2024-02-01", Some("减仓")).unwrap();
+        s.add_position("600000", 10.0, 100, "2024-01-01", None)
+            .unwrap();
+        s.sell_position("600000", 12.0, 40, "2024-02-01", Some("减仓"))
+            .unwrap();
         let trades = s.list_trades().unwrap();
         let buy = trades.iter().find(|t| t.action == "buy").unwrap();
         assert!(buy.pnl.is_none() && buy.cost_basis.is_none());
